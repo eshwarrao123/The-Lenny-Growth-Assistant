@@ -198,12 +198,18 @@ Server-Sent Events (SSE) stream highly structured JSON payloads to the frontend.
 * `frontend`: Next.js Node container on port `3000`.
 * **Host OS**: Ollama runs directly on the host to avoid GPU passthrough complexities.
 
-## 9. Testing Architecture
+## 9. Knowledge Base Ingestion Pipeline
+* **Source**: `https://github.com/ChatPRD/lennys-podcast-transcripts`
+* **Parser**: Custom regex-based parser mapping `Speaker (Timestamp):` to semantic blocks. Handles anomalous transcripts.
+* **Chunker**: `tiktoken` (cl100k_base) token counting. 500 max limit, 100 overlap. Hard splits large paragraphs deterministically.
+* **Idempotency**: Transcript folder names act as `source_id`. `ingest.py` detects existing episodes and skips or rebuilds based on `--refresh`.
+
+## 10. Testing Architecture
 * **Backend Unit**: Pytest for Pydantic schema validation, sliding-window chunking logic, and mocked provider interfaces.
 * **Integration**: Testing pgvector HNSW insert/retrieve flows.
 * **E2E Browser**: Playwright tests to validate Artifact Viewer sandboxing (XSS attempts) and provider toggling.
 
-## 10. Decisions Intentionally Deferred (Phase 3+)
+## 11. Decisions Intentionally Deferred (Phase 4+)
 - Hybrid search (BM25 + Dense) implementation.
 - Real-time cloud audio ingestion.
 - Multi-user authentication (RBAC).

@@ -114,6 +114,29 @@ Key variables:
 - `OPENAI_API_KEY` - Optional cloud provider
 - `ANTHROPIC_API_KEY` - Optional cloud provider
 
+## Knowledge Base Ingestion
+
+The Lenny Growth Assistant retrieves facts directly from Lenny's Podcast transcripts. To populate the local pgvector database:
+
+1. **Start Infrastructure**: Ensure PostgreSQL is running (`docker compose up -d postgres`) and Ollama is available locally.
+2. **Pull Embedding Model**: Run `ollama pull nomic-embed-text` to ensure the 768d embedding model is ready.
+3. **Download Transcripts**:
+   ```bash
+   cd backend
+   python -m scripts.download_transcripts
+   ```
+   *This clones the active ChatPRD transcript repository into `backend/data/transcripts`.*
+4. **Ingest and Index**:
+   ```bash
+   python -m scripts.ingest
+   ```
+   *This parses YAML metadata, chunks text by tokens while preserving speaker IDs, creates embeddings, and performs idempotent PostgreSQL inserts.*
+5. **Validate**:
+   ```bash
+   python -m scripts.validate
+   ```
+   *Ensures episodes are tracked, chunks count is correct, embedding dimensions are 768, and the HNSW vector index is responding to cosine distance queries.*
+
 ## Testing
 
 ```bash
