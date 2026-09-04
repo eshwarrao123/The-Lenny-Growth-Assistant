@@ -1,6 +1,6 @@
 # The Lenny Growth Assistant - Architecture Document
 
-## High-Level Architecture
+## 1. Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@
 │                    │  API Client │                              │
 │                    └──────┬──────┘                              │
 └───────────────────────────┼────────────────────────────────────┘
-                            │ HTTP/WS
+                            │ HTTP (SSE & REST)
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Backend (FastAPI)                        │
@@ -26,7 +26,7 @@
 │  │  Chat API    │ │  RAG Service │ │ Skill Router │             │
 │  │  - Sessions  │ │  - Retrieval │ │  - Ship 30   │             │
 │  │  - Messages  │ │  - Embedding │ │  - Artifact  │             │
-│  │  - Streaming │ │  - Rerank    │ │  - Extensible│             │
+│  │  - Streaming │ │  - pgvector  │ │  - Extensible│             │
 │  └──────────────┘ └──────┬───────┘ └──────────────┘             │
 │                           │                                      │
 │              ┌────────────┼────────────┐                         │
@@ -45,62 +45,50 @@
        └──────────────┘            └──────────────┘
 ```
 
-## Component Details
+## 2. Database Schema
 
-### Backend Services
-
-#### 1. Chat Service (`backend/app/services/chat.py`)
-- Session CRUD operations
-- Message persistence
-- Streaming response handling
-- WebSocket connection management
-
-#### 2. RAG Service (`backend/app/services/rag.py`)
-- Transcript chunking strategy
-- Embedding generation
-- Vector similarity search
-- Source attribution
-
-#### 3. Skill Router (`backend/app/services/skills/`)
-- Base skill interface
-- Ship 30 for 30 implementation
-- Artifact generation skill
-- Skill registry and dispatch
-
-#### 4. Provider Abstraction (`backend/app/providers/`)
-- `BaseLLMProvider` interface
-- `OllamaProvider` implementation
-- `OpenAIProvider` implementation
-- `AnthropicProvider` implementation
-- Factory for provider selection
-
-### Database Schema
+The database relies on PostgreSQL with the `pgvector` extension and UUID primary keys.
 
 ```sql
--- Episodes table
+-- Episodes table (maps 1:1 with transcript files)
 CREATE TABLE episodes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    guest VARCHAR(255),
+    source_id VARCHAR(255) UNIQUE, -- e.g., 'ada-chen-rekhi'
     title VARCHAR(500),
+    guest_name VARCHAR(255),
+    publish_date DATE,
     youtube_url VARCHAR(500),
     video_id VARCHAR(50),
-    publish_date DATE,
-    description TEXT,
     duration_seconds INTEGER,
-    duration VARCHAR(50),
-    view_count BIGINT,
-    channel VARCHAR(255),
-    transcript_content TEXT,
-    embedding VECTOR(1536),  -- pgvector
-    created_at TIMESTAMP DEFAULT NOW()
+    description TEXT,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Transcript Chunks (for RAG retrieval)
+CREATE TABLE transcript_chunks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    episode_id UUID REFERENCES episodes(id) ON DELETE CASCADE,
+    chunk_index INTEGER,
+    text TEXT,
+    token_count INTEGER,
+    speaker VARCHAR(255),
+    start_time VARCHAR(50),
+    embedding VECTOR(768),  -- using nomic-embed-text dimensionality
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- HNSW Index for fast cosine similarity search
+CREATE INDEX idx_chunks_embedding ON transcript_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- Chat sessions
 CREATE TABLE chat_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title VARCHAR(500),
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Messages
@@ -109,10 +97,8 @@ CREATE TABLE messages (
     session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
     role VARCHAR(50),  -- user, assistant, system
     content TEXT,
-    metadata JSONB DEFAULT '{}',
-    sources JSONB DEFAULT '[]',  -- episode references
-    artifact_ids UUID[] DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT NOW()
+    sources JSONB DEFAULT '[]',  -- array of citation references
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Artifacts
@@ -120,107 +106,104 @@ CREATE TABLE artifacts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
     message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
-    type VARCHAR(50),  -- html, react, markdown, code
+    type VARCHAR(50),  -- html, markdown
+    title VARCHAR(255),
     content TEXT,
     version INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Indexes
-CREATE INDEX idx_episodes_embedding ON episodes USING ivfflat (embedding vector_cosine_ops);
+-- Essential Indexes
 CREATE INDEX idx_messages_session ON messages(session_id);
 CREATE INDEX idx_artifacts_session ON artifacts(session_id);
 ```
 
-### Frontend Architecture
+## 3. Embedding & Retrieval Strategy
 
-#### Pages (App Router)
-- `/` - Main chat interface (split pane)
-- `/sessions/[id]` - Session view with history
-- `/artifacts/[id]` - Standalone artifact view
+### 3.1 pgvector & Embeddings
+* **Model**: Local Ollama `nomic-embed-text` (768 dimensions). It balances speed, local independence, and reasonable retrieval accuracy.
+* **Index**: HNSW (Hierarchical Navigable Small World). Chosen over IVFFLAT for improved recall and zero-training requirement prior to insertions.
+* **Operator**: `vector_cosine_ops` (Cosine distance).
 
-#### Components
-- `ChatPane` - Message list, streaming display, input
-- `ArtifactViewer` - Iframe sandbox, version tabs, controls
-- `SessionSidebar` - Session list, new session, search
-- `MessageBubble` - User/assistant messages with sources
-- `StreamingResponse` - Real-time token display
+### 3.2 Chunking Strategy
+* **Method**: Sliding-window semantic chunker.
+* **Target Size**: ~500 tokens with ~100 token overlap.
+* **Metadata Tracking**: The parsing logic retains the `speaker` (e.g., `Ada Chen Rekhi (00:00:00):`) and `start_time` mapping for the dominant speaker within each chunk to support detailed citations.
 
-#### State Management
-- React Query for server state
-- Local state for UI (panes, modals)
-- WebSocket for streaming
-
-### API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| POST | `/api/sessions` | Create session |
-| GET | `/api/sessions` | List sessions |
-| GET | `/api/sessions/{id}` | Get session with messages |
-| DELETE | `/api/sessions/{id}` | Delete session |
-| PATCH | `/api/sessions/{id}` | Update session title |
-| POST | `/api/chat` | Send message (streaming) |
-| WS | `/api/chat/ws/{session_id}` | WebSocket for streaming |
-| GET | `/api/artifacts/{id}` | Get artifact |
-| POST | `/api/artifacts` | Create artifact |
-| POST | `/api/rag/query` | RAG search |
-
-### Streaming Protocol
-
-**Server-Sent Events (SSE)** for HTTP streaming:
-```
-data: {"type": "token", "content": "Hello"}
-data: {"type": "token", "content": " world"}
-data: {"type": "sources", "sources": [...]}
-data: {"type": "artifact", "artifact_id": "..."}
-data: {"type": "done"}
-```
-
-**WebSocket** for bidirectional:
+### 3.3 Retrieval Contract
+**Input:** `retrieve(query: str, top_k: int = 5, threshold: float = 0.65)`
+**Output:** Array of `RetrievalResult` objects:
 ```json
-{"type": "user_message", "content": "..."}
-{"type": "assistant_token", "content": "..."}
-{"type": "sources", "sources": [...]}
-{"type": "artifact", "artifact_id": "..."}
-{"type": "done"}
+{
+  "chunk_id": "uuid",
+  "episode_id": "uuid",
+  "episode_title": "...",
+  "guest_name": "...",
+  "text": "transcript snippet...",
+  "score": 0.82,
+  "speaker": "Ada Chen Rekhi",
+  "start_time": "00:01:21"
+}
 ```
 
-### Security Considerations
+## 4. LLM Provider Abstraction
 
-1. **Artifact Isolation**: HTML artifacts rendered in sandboxed iframe
-   - `sandbox="allow-scripts allow-forms"` (no `allow-same-origin`)
-   - Separate origin via `srcdoc` or blob URL
-   - CSP headers on artifact endpoint
+### 4.1 Interface Contract
+All model interactions pass through the `BaseLLMProvider` interface to decouple business logic from API specifics:
+- `generate_stream(messages: List[dict], **kwargs) -> AsyncGenerator[dict, None]`
+- `generate_embeddings(texts: List[str]) -> List[List[float]]`
+- `health_check() -> bool`
 
-2. **Input Validation**: Pydantic models for all API inputs
+### 4.2 Supported Providers
+1. **Ollama (Primary / Local)**: Default execution path for zero-cost, offline deployment (model: `qwen2.5:7b`).
+2. **OpenAI (Cloud)**: Scalable cloud alternative for deeper reasoning (model: `gpt-4o-mini`).
 
-3. **CORS**: Restricted to configured origins
+## 5. SSE Streaming Contract
 
-4. **Secrets**: Never in code, only via environment variables
+Server-Sent Events (SSE) stream highly structured JSON payloads to the frontend.
 
-### Configuration Strategy
+| Event Type | Payload Schema | Description |
+|---|---|---|
+| `status` | `{"message": str}` | UI loading states (e.g., "Retrieving context...") |
+| `sources` | `[{"guest": str, "title": str, "text": str}]` | The retrieved context used to ground the upcoming response |
+| `token` | `{"content": str}` | LLM string token for standard message stream |
+| `artifact_start` | `{"type": str, "id": str, "title": str}` | Triggers Artifact Viewer to open (type: `html` or `markdown`) |
+| `artifact_chunk` | `{"content": str}` | Streams code blocks bypassing the main chat window |
+| `artifact_done` | `{"id": str}` | Signals completion of artifact generation |
+| `error` | `{"message": str}` | Halts stream and renders error in UI |
+| `done` | `{}` | Graceful termination of request |
 
-- Pydantic Settings (`BaseSettings`) for type-safe config
-- `.env.example` documents all options
-- Environment-specific overrides via `.env.local`
-- Docker Compose injects env vars
+## 6. API Contracts
 
-### Migration Strategy
+### 6.1 Sessions & Chat
+* `POST /api/sessions`: Returns `{ "id": "uuid", "title": "New Chat" }`
+* `GET /api/sessions/{session_id}`: Returns full hydrated history `{ "session": {...}, "messages": [...], "artifacts": [...] }`
+* `POST /api/chat`: Expects `{ "session_id": "uuid", "message": "str", "provider": "ollama|openai" }`. Returns `Content-Type: text/event-stream`.
 
-- Alembic for schema migrations
-- Initial migration creates all tables
-- Version-controlled migration files
-- Run on container startup
+### 6.2 Health & Observability
+* `GET /api/health`: Returns detailed dependency status `{ "status": "ok", "db": "ok", "ollama": "ok" }`. 
 
-## Decisions to Validate
+## 7. Security Boundaries
 
-| Decision | Status | Notes |
-|----------|--------|-------|
-| Next.js App Router vs Vite | To validate | App Router preferred for RSC |
-| async SQLAlchemy vs asyncpg | To validate | SQLAlchemy for ORM benefits |
-| Ollama in Docker vs host | Host | Avoid GPU passthrough complexity |
-| SSE vs WebSocket | To validate | SSE simpler for unidirectional |
-| pgvector index type | To validate | IVFFLAT vs HNSW |
-| Chunking strategy | To validate | Semantic vs fixed-size |
+* **User Input**: Sanitized and parameterized via SQLAlchemy.
+* **Transcripts**: Evaluated as untrusted `<context>` chunks to prevent prompt injection overriding core agent instructions.
+* **HTML Artifacts**: Strictly sandboxed on the client-side via `<iframe sandbox="allow-scripts allow-forms">` (explicitly missing `allow-same-origin`) to ensure zero access to parent DOM/cookies.
+* **Secrets**: Managed purely server-side via `.env` (Pydantic `BaseSettings`).
+
+## 8. Docker Topology
+
+* `postgres`: Official `pgvector/pgvector:pg16` image on port `5432`.
+* `backend`: FastAPI Python container. Connects to `postgres:5432` and host Ollama via `host.docker.internal:11434`.
+* `frontend`: Next.js Node container on port `3000`.
+* **Host OS**: Ollama runs directly on the host to avoid GPU passthrough complexities.
+
+## 9. Testing Architecture
+* **Backend Unit**: Pytest for Pydantic schema validation, sliding-window chunking logic, and mocked provider interfaces.
+* **Integration**: Testing pgvector HNSW insert/retrieve flows.
+* **E2E Browser**: Playwright tests to validate Artifact Viewer sandboxing (XSS attempts) and provider toggling.
+
+## 10. Decisions Intentionally Deferred (Phase 3+)
+- Hybrid search (BM25 + Dense) implementation.
+- Real-time cloud audio ingestion.
+- Multi-user authentication (RBAC).
