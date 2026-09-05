@@ -199,10 +199,12 @@ Server-Sent Events (SSE) stream highly structured JSON payloads to the frontend.
 * **Host OS**: Ollama runs directly on the host to avoid GPU passthrough complexities.
 
 ## 9. Knowledge Base Ingestion Pipeline
-* **Source**: `https://github.com/ChatPRD/lennys-podcast-transcripts`
-* **Parser**: Custom regex-based parser mapping `Speaker (Timestamp):` to semantic blocks. Handles anomalous transcripts.
-* **Chunker**: `tiktoken` (cl100k_base) token counting. 500 max limit, 100 overlap. Hard splits large paragraphs deterministically.
-* **Idempotency**: Transcript folder names act as `source_id`. `ingest.py` detects existing episodes and skips or rebuilds based on `--refresh`.
+* **Source**: `https://github.com/ChatPRD/lennys-podcast-transcripts` (303 episode transcripts).
+* **Parser**: Custom regex-based parser mapping `Speaker (Timestamp):` to semantic blocks. Robust against missing YAML frontmatter keys (e.g. missing publish_date/youtube_url in raw files like `daniel-lereya`).
+* **Chunker**: Token-aware sliding-window chunking. 500 max limit, 100 overlap. Hard splits large paragraphs deterministically.
+* **Embeddings**: Native Ollama `/api/embed` batching endpoint with `nomic-embed-text` (768 dimensions), split into sub-batches of 120 items and run with configurable concurrency (default `--concurrency 8`).
+* **SQLAlchemy & pgvector**: Implements native SQLAlchemy `Vector(768)` type from `pgvector.sqlalchemy` for type-safe schema binding and migration safety.
+* **Idempotency**: Transcript folder names act as `source_id`. `ingest.py` checks existing source IDs and skips duplicate processing or rebuilds cleanly when `--refresh` is supplied.
 
 ## 10. Testing Architecture
 * **Backend Unit**: Pytest for Pydantic schema validation, sliding-window chunking logic, and mocked provider interfaces.

@@ -67,3 +67,31 @@ class IngestionRepository:
         self.session.add_all(db_chunks)
         await self.session.commit()
         return len(db_chunks)
+
+    async def search_similar_chunks(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Executes a vector cosine distance search against stored transcript chunks using pgvector.
+        Returns top-K matching chunks with episode metadata and similarity score.
+        """
+        from sqlalchemy import text
+        stmt = (
+            select(
+                TranscriptChunk,
+                Episode,
+                TranscriptChunk.embedding.cosine_distance(query_vector).label("distance")
+            )
+            .join(Episode, TranscriptChunk.episode_id == Episode.id)
+            .order_by(text("distance ASC"))
+            .limit(top_k)
+        )
+        result = await self.session.execute(stmt)
+        results = []
+        for chunk, episode, distance in result.all():
+            similarity_score = 1.0 - float(distance) if distance is not None else 0.0
+            results.append({
+                "chunk": chunk,
+                "episode": episode,
+                "distance": distance,
+                "similarity_score": similarity_score
+            })
+        return results

@@ -28,6 +28,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    from app.api import chat, sessions
+    from app.providers.factory import get_llm_provider
+    from sqlalchemy.future import select
+    from app.models import Episode
+
+    app.include_router(chat.router)
+    app.include_router(sessions.router)
+
     @app.on_event("startup")
     async def startup() -> None:
         await init_db()
@@ -36,9 +44,42 @@ def create_app() -> FastAPI:
     async def shutdown() -> None:
         await close_db()
 
-    @app.get("/health")
+    @app.get("/api/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        # Lightweight DB check
+        db_status = "ok"
+        try:
+            from app.core.database import async_session_maker
+            async with async_session_maker() as session:
+                await session.execute(select(Episode).limit(1))
+        except Exception as e:
+            db_status = "error"
+
+        # Lightweight provider checks
+        ollama_status = "ok"
+        try:
+            ollama = get_llm_provider("ollama")
+            if not await ollama.health_check():
+                ollama_status = "degraded"
+        except Exception:
+            ollama_status = "error"
+            
+        openai_status = "ok"
+        try:
+            openai = get_llm_provider("openai")
+            if not await openai.health_check():
+                openai_status = "missing_key"
+        except Exception:
+            openai_status = "error"
+
+        overall_status = "ok" if db_status == "ok" else "degraded"
+
+        return {
+            "status": overall_status,
+            "db": db_status,
+            "ollama": ollama_status,
+            "openai": openai_status
+        }
 
     return app
 

@@ -114,28 +114,92 @@ Key variables:
 - `OPENAI_API_KEY` - Optional cloud provider
 - `ANTHROPIC_API_KEY` - Optional cloud provider
 
-## Knowledge Base Ingestion
+## Knowledge Base Ingestion & Verification
 
-The Lenny Growth Assistant retrieves facts directly from Lenny's Podcast transcripts. To populate the local pgvector database:
+The Lenny Growth Assistant retrieves facts directly from Lenny's Podcast transcripts ingested into PostgreSQL + pgvector.
 
-1. **Start Infrastructure**: Ensure PostgreSQL is running (`docker compose up -d postgres`) and Ollama is available locally.
-2. **Pull Embedding Model**: Run `ollama pull nomic-embed-text` to ensure the 768d embedding model is ready.
-3. **Download Transcripts**:
-   ```bash
+### Step-by-Step Production Setup
+
+1. **Start Docker Infrastructure (PostgreSQL + pgvector)**:
+   ```powershell
+   # Run PostgreSQL 16 container with pgvector extension
+   docker compose up -d postgres
+   docker version
+   docker compose version
+   ```
+
+2. **Verify & Start Ollama Embedding Engine**:
+   Ensure Ollama is running and pull the official `nomic-embed-text` 768-dimension embedding model:
+   ```powershell
+   ollama pull nomic-embed-text
+   # Verify reachable at http://localhost:11434/api/tags
+   ```
+
+3. **Synchronize Real Podcast Transcripts**:
+   Download/sync the latest transcript repository from ChatPRD:
+   ```powershell
    cd backend
-   python -m scripts.download_transcripts
+   $env:PYTHONPATH="."
+   python scripts/download_transcripts.py
    ```
-   *This clones the active ChatPRD transcript repository into `backend/data/transcripts`.*
-4. **Ingest and Index**:
-   ```bash
-   python -m scripts.ingest
+   *Discovers and validates all 303 episode directories under `backend/data/transcripts/episodes/`.*
+
+4. **Apply Alembic Migrations**:
+   ```powershell
+   alembic upgrade head
+   python scripts/verify_pgvector.py
    ```
-   *This parses YAML metadata, chunks text by tokens while preserving speaker IDs, creates embeddings, and performs idempotent PostgreSQL inserts.*
-5. **Validate**:
-   ```bash
-   python -m scripts.validate
+   *Validates `vector` extension, 768d embedding columns, and HNSW cosine distance index (`<=>`).*
+
+5. **Run High-Speed Pipeline Ingestion**:
+   ```powershell
+   python scripts/ingest.py --concurrency 8
    ```
-   *Ensures episodes are tracked, chunks count is correct, embedding dimensions are 768, and the HNSW vector index is responding to cosine distance queries.*
+   *Parses frontmatter metadata, chunks paragraphs by token limits while maintaining speaker/timestamp context, generates 768d embeddings in batches via Ollama `/api/embed`, and performs idempotent database writes.*
+
+6. **Verify Data Integrity & Retrieval**:
+   ```powershell
+   # Comprehensive database verification
+   python scripts/verify_stored_data.py
+
+   # Real similarity vector retrieval test
+   python scripts/test_vector_retrieval.py
+   ```
+
+### Verified Pipeline Outputs
+
+- **pgvector Check (`verify_pgvector.py`)**:
+  ```text
+  [SUCCESS] pgvector extension exists: version 0.6.0
+  [SUCCESS] Expected tables present: ['alembic_version', 'artifacts', 'chat_sessions', 'episodes', 'messages', 'transcript_chunks']
+  [SUCCESS] Dimension verified: 768
+  [SUCCESS] HNSW Index exists: ix_chunks_embedding
+  [SUCCESS] Cosine distance query executed cleanly with <=> operator
+  ```
+
+- **Stored Data Statistics (`verify_stored_data.py`)**:
+  ```text
+  Episode Count: 303
+  Chunk Count: ~13,875
+  Embedding Count: ~13,875
+  Embedding Dimension: 768 (100% verified)
+  Duplicate Episode IDs: 0
+  Missing Citation Metadata: 0
+  Orphan Chunks (FK Violation): 0
+  ```
+
+- **Vector Similarity Search (`test_vector_retrieval.py`)**:
+  Query: *"How do you measure product-market fit?"*
+  Returns top-K matching chunks with episode title, guest name, speaker label, timestamp citation, chunk UUID, and cosine similarity score.
+
+### Troubleshooting
+
+- **PostgreSQL Connection Refused**:
+  Ensure `POSTGRES_HOST=localhost` in `.env` matches your container binding on port 5432. Avoid using ephemeral WSL2 virtual interface IPs as they change across host system reboots.
+- **Ollama Dimension Mismatch**:
+  Ensure `OLLAMA_EMBEDDING_MODEL=nomic-embed-text` is configured in `.env`. Do NOT substitute with 384d or 1536d models without updating migration schema.
+- **Idempotency & Rebuild**:
+  Running `python scripts/ingest.py` without `--refresh` skips existing episodes without duplicating records. Use `python scripts/ingest.py --refresh` to delete and rebuild specific episodes cleanly.
 
 ## Testing
 

@@ -8,6 +8,7 @@ Create Date: 2026-09-05 00:00:00.000000
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from pgvector.sqlalchemy import Vector
 
 # revision identifiers, used by Alembic.
 revision = '002_phase2_schema'
@@ -53,7 +54,7 @@ def upgrade() -> None:
         sa.Column('token_count', sa.Integer(), nullable=True),
         sa.Column('speaker', sa.String(length=255), nullable=True),
         sa.Column('start_time', sa.String(length=50), nullable=True),
-        sa.Column('embedding', postgresql.VECTOR(dim=768), nullable=True),
+        sa.Column('embedding', Vector(768), nullable=True),
         sa.Column('metadata_', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(['episode_id'], ['episodes.id'], ondelete='CASCADE'),

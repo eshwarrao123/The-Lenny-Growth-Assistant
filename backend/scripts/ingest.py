@@ -4,6 +4,10 @@ import logging
 import sys
 from pathlib import Path
 
+# Silence verbose third-party loggers
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.rag.parser import TranscriptParser
@@ -19,48 +23,50 @@ async def process_episode(
     parser: TranscriptParser, 
     chunker: TranscriptChunker, 
     embedder: OllamaEmbeddings, 
-    repo: IngestionRepository, 
     refresh: bool
 ) -> dict:
     source_id = file_path.parent.name
     
-    # Idempotency check
-    existing_ep = await repo.get_episode_by_source_id(source_id)
-    if existing_ep:
-        if not refresh:
-            logger.info(f"Skipping {source_id}: already exists. Use --refresh to rebuild.")
-            return {"status": "skipped"}
-        else:
-            logger.info(f"Rebuilding {source_id}: deleting existing records.")
-            await repo.delete_episode_by_source_id(source_id)
+    async with async_session_maker() as session:
+        repo = IngestionRepository(session)
+        
+        # Idempotency check
+        existing_ep = await repo.get_episode_by_source_id(source_id)
+        if existing_ep:
+            if not refresh:
+                logger.info(f"Skipping {source_id}: already exists.")
+                return {"status": "skipped"}
+            else:
+                logger.info(f"Rebuilding {source_id}: deleting existing records.")
+                await repo.delete_episode_by_source_id(source_id)
+                
+        # Parse
+        metadata, paragraphs = parser.parse_file(file_path)
+        if not paragraphs:
+            logger.warning(f"No paragraphs found for {source_id} ({file_path})")
+            return {"status": "failed", "reason": "No paragraphs", "file": str(file_path)}
             
-    # Parse
-    metadata, paragraphs = parser.parse_file(file_path)
-    if not paragraphs:
-        logger.warning(f"No paragraphs found for {source_id}")
-        return {"status": "failed", "reason": "No paragraphs"}
+        # Chunk
+        chunks = chunker.chunk_paragraphs(paragraphs)
+        if not chunks:
+            logger.warning(f"No chunks generated for {source_id} ({file_path})")
+            return {"status": "failed", "reason": "No chunks", "file": str(file_path)}
+            
+        # Embed
+        texts_to_embed = [c["text"] for c in chunks]
+        try:
+            embeddings = await embedder.embed_batch(texts_to_embed)
+        except Exception as e:
+            logger.error(f"Failed to generate embeddings for {source_id}: {e}")
+            return {"status": "failed", "reason": f"Embedding failed: {e}", "file": str(file_path)}
+            
+        # Save
+        ep = await repo.insert_episode(source_id, metadata)
+        inserted = await repo.insert_chunks(ep.id, chunks, embeddings)
         
-    # Chunk
-    chunks = chunker.chunk_paragraphs(paragraphs)
-    if not chunks:
-        logger.warning(f"No chunks generated for {source_id}")
-        return {"status": "failed", "reason": "No chunks"}
-        
-    # Embed
-    texts_to_embed = [c["text"] for c in chunks]
-    try:
-        embeddings = await embedder.embed_batch(texts_to_embed)
-    except Exception as e:
-        logger.error(f"Failed to generate embeddings for {source_id}: {e}")
-        return {"status": "failed", "reason": "Embedding failed"}
-        
-    # Save
-    ep = await repo.insert_episode(source_id, metadata)
-    inserted = await repo.insert_chunks(ep.id, chunks, embeddings)
-    
-    return {"status": "success", "chunks": inserted}
+        return {"status": "success", "chunks": inserted}
 
-async def run_ingestion(data_dir: str, refresh: bool):
+async def run_ingestion(data_dir: str, refresh: bool, concurrency: int = 5):
     settings = get_settings()
     data_path = Path(data_dir)
     
@@ -90,24 +96,31 @@ async def run_ingestion(data_dir: str, refresh: bool):
         "processed": 0,
         "skipped": 0,
         "failed": 0,
-        "chunks_inserted": 0
+        "chunks_inserted": 0,
+        "failed_files": []
     }
     
-    async with async_session_maker() as session:
-        repo = IngestionRepository(session)
-        
-        for idx, file_path in enumerate(transcript_files, 1):
-            logger.info(f"Processing [{idx}/{len(transcript_files)}]: {file_path.parent.name}")
-            result = await process_episode(file_path, parser, chunker, embedder, repo, refresh)
+    semaphore = asyncio.Semaphore(concurrency)
+    
+    async def worker(idx: int, file_path: Path):
+        async with semaphore:
+            logger.info(f"[{idx}/{len(transcript_files)}] Processing: {file_path.parent.name}")
+            result = await process_episode(file_path, parser, chunker, embedder, refresh)
+            return file_path, result
+
+    tasks = [worker(idx, f) for idx, f in enumerate(transcript_files, 1)]
+    results = await asyncio.gather(*tasks)
+    
+    for file_path, result in results:
+        if result["status"] == "success":
+            stats["processed"] += 1
+            stats["chunks_inserted"] += result["chunks"]
+        elif result["status"] == "skipped":
+            stats["skipped"] += 1
+        else:
+            stats["failed"] += 1
+            stats["failed_files"].append((str(file_path), result.get("reason", "Unknown")))
             
-            if result["status"] == "success":
-                stats["processed"] += 1
-                stats["chunks_inserted"] += result["chunks"]
-            elif result["status"] == "skipped":
-                stats["skipped"] += 1
-            else:
-                stats["failed"] += 1
-                
     logger.info("====================================")
     logger.info("INGESTION COMPLETE")
     logger.info("====================================")
@@ -116,14 +129,19 @@ async def run_ingestion(data_dir: str, refresh: bool):
     logger.info(f"Episodes Skipped:   {stats['skipped']}")
     logger.info(f"Episodes Failed:    {stats['failed']}")
     logger.info(f"Chunks Inserted:    {stats['chunks_inserted']}")
+    if stats["failed_files"]:
+        logger.warning("Failed files details:")
+        for f, r in stats["failed_files"]:
+            logger.warning(f" - {f}: {r}")
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest transcripts into PostgreSQL.")
     parser.add_argument("--data-dir", type=str, default=str(Path(__file__).parent.parent / "data" / "transcripts"), help="Path to cloned repository.")
     parser.add_argument("--refresh", action="store_true", help="Rebuild all existing episodes.")
+    parser.add_argument("--concurrency", type=int, default=5, help="Number of concurrent episode workers.")
     args = parser.parse_args()
     
-    asyncio.run(run_ingestion(args.data_dir, args.refresh))
+    asyncio.run(run_ingestion(args.data_dir, args.refresh, args.concurrency))
 
 if __name__ == "__main__":
     main()

@@ -6,11 +6,12 @@ Create Date: 2026-09-04
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, VECTOR, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+from pgvector.sqlalchemy import Vector
 import uuid
 
 # revision identifiers, used by Alembic.
-revision = '001'
+revision = '001_initial'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -35,7 +36,7 @@ def upgrade() -> None:
         sa.Column('view_count', sa.BigInteger, nullable=True),
         sa.Column('channel', sa.String(255), nullable=True),
         sa.Column('transcript_content', sa.Text, nullable=True),
-        sa.Column('embedding', VECTOR(1536), nullable=True),
+        sa.Column('embedding', Vector(1536), nullable=True),
         sa.Column('created_at', sa.DateTime, nullable=False, server_default=sa.func.now()),
     )
 
