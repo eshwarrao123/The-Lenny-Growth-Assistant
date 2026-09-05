@@ -41,7 +41,8 @@ class ChatRequest(BaseModel):
     session_id: UUID4
     message: str
     provider: Literal["ollama", "openai"] = "ollama"
-    skill: Optional[Literal["auto", "qa", "ship30"]] = "auto"
+    skill: Optional[Literal["auto", "qa", "ship30", "artifact"]] = "auto"
+    artifact_type: Optional[Literal["markdown", "html"]] = None
 
 class CreateSessionResponse(BaseModel):
     id: UUID4

@@ -19,6 +19,11 @@ module.exports = {
         success: '#22C55E',
         error: '#EF4444',
       },
+      borderColor: ({ theme }) => ({
+        ...theme('colors'),
+        border: '#3F3F46',
+        DEFAULT: '#3F3F46',
+      }),
       fontFamily: {
         sans: ['Geist', 'system-ui', 'sans-serif'],
         mono: ['Geist Mono', 'monospace'],

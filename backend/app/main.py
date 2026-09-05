@@ -28,13 +28,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    from app.api import chat, sessions
+    from app.api import chat, sessions, artifacts
     from app.providers.factory import get_llm_provider
     from sqlalchemy.future import select
     from app.models import Episode
 
     app.include_router(chat.router)
     app.include_router(sessions.router)
+    app.include_router(artifacts.router)
 
     @app.on_event("startup")
     async def startup() -> None:

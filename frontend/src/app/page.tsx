@@ -1,15 +1,16 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, X, Copy, Download, ChevronLeft, ChevronRight, Plus, Search, Settings, MessageSquare, FileText, Sparkles } from 'lucide-react'
+import { Send, X, Plus, ChevronLeft, ChevronRight, Settings, Sparkles, Menu } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ArtifactViewer } from '@/components/ArtifactViewer'
 
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
-  sources?: Array<{ episode_id: string; title: string; guest: string }>
-  artifact_ids?: string[]
+  sources?: Array<{ episode?: string; episode_title?: string; title?: string; guest?: string }>
+  artifact_id?: string
   created_at: string
 }
 
@@ -22,10 +23,12 @@ interface Session {
 
 interface Artifact {
   id: string
-  type: string
+  type: 'html' | 'markdown'
+  title?: string
   content: string
   version: number
   created_at: string
+  updated_at: string
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -37,9 +40,12 @@ export default function Home() {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [showArtifact, setShowArtifact] = useState(false)
-  const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null)
+  const [currentArtifact, setCurrentArtifact] = useState<Artifact | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [splitRatio, setSplitRatio] = useState(60)
+  const [artifactVersions, setArtifactVersions] = useState<Artifact[]>([])
+  const artifactsCacheRef = useRef<Record<string, Artifact>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
 
@@ -117,7 +123,9 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: currentSessionId,
-          content: input,
+          message: input,
+          provider: 'ollama',
+          skill: 'auto',
         }),
       })
 
@@ -127,45 +135,120 @@ export default function Home() {
       const decoder = new TextDecoder()
       let assistantContent = ''
       let assistantMessage: Message | null = null
+      let pendingSources: Message['sources'] = null
+      let isArtifactMode = false
+      let artifactBuffer = ''
+      let artifactMetadata: Partial<Artifact> = {}
 
       if (reader) {
+        let buffer = ''
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
 
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          // Keep the last segment: it may be a partial line split across chunks
+          buffer = lines.pop() ?? ''
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6))
-                if (data.type === 'token') {
-                  assistantContent += data.content
-                  if (!assistantMessage) {
-                    assistantMessage = {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]
+            if (line.startsWith('event:')) {
+              const eventType = line.slice(6).trim()
+
+              // Next line should be data
+              const dataLine = lines[i + 1]
+              if (dataLine && dataLine.startsWith('data:')) {
+                try {
+                  const data = JSON.parse(dataLine.slice(5).trim())
+
+                  if (eventType === 'token') {
+                    assistantContent += data.content || ''
+                    if (!assistantMessage) {
+                      assistantMessage = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        content: assistantContent,
+                        sources: pendingSources ?? undefined,
+                        created_at: new Date().toISOString(),
+                      }
+                      pendingSources = null
+                      setMessages(prev => [...prev, assistantMessage!])
+                    } else {
+                      setMessages(prev => prev.map(m =>
+                        m.id === assistantMessage!.id ? { ...m, content: assistantContent } : m
+                      ))
+                    }
+                  } else if (eventType === 'sources') {
+                    if (assistantMessage) {
+                      setMessages(prev => prev.map(m =>
+                        m.id === assistantMessage!.id ? { ...m, sources: data.sources } : m
+                      ))
+                    } else {
+                      // Retrieval precedes generation: sources can arrive
+                      // before the first token. Buffer until the message exists.
+                      pendingSources = data.sources
+                    }
+                  } else if (eventType === 'artifact_start') {
+                    isArtifactMode = true
+                    artifactBuffer = ''
+                    artifactMetadata = {
+                      type: data.type,
+                      title: data.title,
+                      version: 1,
+                    }
+                  } else if (eventType === 'artifact_chunk' && isArtifactMode) {
+                    artifactBuffer += data.content || ''
+                  } else if (eventType === 'artifact_done') {
+                    isArtifactMode = false
+                    const artifact: Artifact = {
+                      id: data.artifact_id || crypto.randomUUID(),
+                      type: artifactMetadata.type as 'html' | 'markdown',
+                      title: artifactMetadata.title,
+                      content: artifactBuffer,
+                      version: artifactMetadata.version || 1,
+                      created_at: new Date().toISOString(),
+                      updated_at: new Date().toISOString(),
+                    }
+                    artifactsCacheRef.current[artifact.id] = artifact
+                    setCurrentArtifact(artifact)
+                    setShowArtifact(true)
+
+                    if (currentSessionId && artifact.title) {
+                      fetchArtifactVersions(currentSessionId, artifact.title)
+                    }
+
+                    if (assistantMessage) {
+                      setMessages(prev => prev.map(m =>
+                        m.id === assistantMessage!.id ? { ...m, artifact_id: artifact.id } : m
+                      ))
+                    } else {
+                      // Artifact streams carry no token events. Mirror the
+                      // backend, which persists an assistant message for the
+                      // artifact exchange and links it to the artifact.
+                      assistantMessage = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        content: `Generated ${artifact.type} artifact`,
+                        artifact_id: artifact.id,
+                        sources: pendingSources ?? undefined,
+                        created_at: new Date().toISOString(),
+                      }
+                      pendingSources = null
+                      setMessages(prev => [...prev, assistantMessage!])
+                    }
+                  } else if (eventType === 'error') {
+                    // Surface backend/stream errors instead of failing silently
+                    setMessages(prev => [...prev, {
                       id: crypto.randomUUID(),
                       role: 'assistant',
-                      content: assistantContent,
+                      content: `⚠️ ${data.message || 'Something went wrong while generating a response. Please try again.'}`,
                       created_at: new Date().toISOString(),
-                    }
-                    setMessages(prev => [...prev, assistantMessage!])
-                  } else {
-                    setMessages(prev => prev.map(m =>
-                      m.id === assistantMessage!.id ? { ...m, content: assistantContent } : m
-                    ))
+                    }])
                   }
-                } else if (data.type === 'sources' && assistantMessage) {
-                  setMessages(prev => prev.map(m =>
-                    m.id === assistantMessage!.id ? { ...m, sources: data.sources } : m
-                  ))
-                } else if (data.type === 'artifact' && assistantMessage) {
-                  setMessages(prev => prev.map(m =>
-                    m.id === assistantMessage!.id ? { ...m, artifact_ids: [...(m.artifact_ids || []), data.artifact_id] } : m
-                  ))
+                } catch (parseError) {
+                  // Ignore parse errors for incomplete chunks
                 }
-              } catch {
-                // Ignore parse errors for incomplete chunks
               }
             }
           }
@@ -173,20 +256,55 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error sending message:', error)
-      // Remove the user message on error
-      setMessages(prev => prev.slice(0, -1))
+      // Keep the user message visible and surface a clear inline error
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: '⚠️ Unable to reach the server. Please check your connection and try again.',
+        created_at: new Date().toISOString(),
+      }])
     } finally {
       setIsStreaming(false)
     }
   }
 
+  const fetchArtifactVersions = async (sessionId: string, title: string) => {
+    try {
+      const res = await fetch(
+        `${API_URL}/api/artifacts/versions/${sessionId}/${encodeURIComponent(title)}`
+      )
+      if (res.ok) {
+        const data = await res.json()
+        setArtifactVersions(data.versions || [])
+      } else {
+        setArtifactVersions([])
+      }
+    } catch (error) {
+      console.error('Failed to fetch artifact versions:', error)
+      setArtifactVersions([])
+    }
+  }
+
   const handleArtifactClick = async (artifactId: string) => {
+    // Check in-memory cache first for instant re-opening
+    const cached = artifactsCacheRef.current[artifactId]
+    if (cached) {
+      setCurrentArtifact(cached)
+      setShowArtifact(true)
+      if (currentSessionId && cached.title) {
+        fetchArtifactVersions(currentSessionId, cached.title)
+      }
+    }
     try {
       const res = await fetch(`${API_URL}/api/artifacts/${artifactId}`)
       if (res.ok) {
         const artifact = await res.json()
-        setSelectedArtifact(artifact)
+        artifactsCacheRef.current[artifact.id] = artifact
+        setCurrentArtifact(artifact)
         setShowArtifact(true)
+        if (currentSessionId && artifact.title) {
+          fetchArtifactVersions(currentSessionId, artifact.title)
+        }
       }
     } catch (error) {
       console.error('Failed to fetch artifact:', error)
@@ -235,9 +353,12 @@ export default function Home() {
     <div className="flex h-screen bg-background overflow-hidden">
       {/* Sidebar */}
       <aside
+        aria-label="Session sidebar"
         className={cn(
-          'flex flex-col border-r border-border bg-surface transition-all duration-200',
-          sidebarOpen ? 'w-72' : 'w-16'
+          'fixed md:relative inset-y-0 left-0 z-40 w-72 flex flex-col border-r border-border bg-surface md:transition-all md:duration-200',
+          'transform md:transform-none',
+          mobileNavOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
+          sidebarOpen ? 'md:w-72' : 'md:w-16'
         )}
       >
         <div className="flex h-16 items-center justify-between px-4 border-b border-border">
@@ -265,9 +386,9 @@ export default function Home() {
 
           <div className={cn('space-y-1', !sidebarOpen && 'hidden')}>
             <p className="px-2 text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
-              Today
+              Recent
             </p>
-            {sessions.slice(0, 5).map(session => (
+            {sessions.slice(0, 10).map(session => (
               <button
                 key={session.id}
                 onClick={() => setCurrentSessionId(session.id)}
@@ -293,11 +414,27 @@ export default function Home() {
         </div>
       </aside>
 
+      {/* Mobile sidebar backdrop */}
+      {mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/60 md:hidden"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0" ref={chatContainerRef}>
         {/* Header */}
         <header className="flex h-16 items-center justify-between px-4 border-b border-border bg-surface">
           <div className="flex items-center gap-4">
+            <button
+              onClick={() => setMobileNavOpen(true)}
+              className="btn-ghost p-2 md:hidden"
+              aria-label="Open navigation menu"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
             <h2 className="font-medium text-lg truncate max-w-[300px]">
               {currentSession?.title || 'Select a session'}
             </h2>
@@ -307,39 +444,30 @@ export default function Home() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowArtifact(true)}
-              className="btn-ghost p-2"
-              disabled={!selectedArtifact}
-            >
-              <FileText className="h-5 w-5" />
-            </button>
-          </div>
         </header>
 
         {/* Chat + Artifact Split */}
         <div className="flex-1 flex relative overflow-hidden">
           {/* Chat Pane */}
           <div
-            className="flex flex-col overflow-hidden"
-            style={{ width: `${splitRatio}%` }}
+            className="chat-pane-host flex flex-col overflow-hidden"
+            style={{ '--chat-split': showArtifact ? `${splitRatio}%` : '100%' } as React.CSSProperties}
           >
-            <div className="flex-1 overflow-y-auto p-4 space-y-6" ref={messagesEndRef}>
+            <div className="flex-1 overflow-y-auto p-4 space-y-6">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-text-muted">
                   <Sparkles className="h-12 w-12 mb-4 opacity-50" />
                   <p className="text-lg font-medium">Welcome to Lenny Growth Assistant</p>
                   <p className="text-sm mt-2 text-center max-w-md">
                     Ask questions about product, growth, and startups grounded in Lenny's Podcast transcripts.
-                    Try the <span className="text-primary">/ship30</span> skill for writing exercises.
+                    Try <span className="text-primary">/ship30</span> for essays or <span className="text-primary">/artifact</span> for frameworks.
                   </p>
                   <div className="mt-6 flex flex-wrap gap-2 justify-center">
                     {[
                       'How do I improve retention?',
-                      'What are good PLG metrics?',
-                      'How to run effective user interviews?',
-                      '/ship30 Write a cold email',
+                      'Create a PLG framework',
+                      '/ship30 Write about onboarding',
+                      'Make a pricing calculator',
                     ].map((suggestion, i) => (
                       <button
                         key={i}
@@ -377,7 +505,7 @@ export default function Home() {
                       )}
                     >
                       <div className="prose prose-invert max-w-none">
-                        <p className="whitespace-pre-wrap">{message.content}</p>
+                        <p className="whitespace-pre-wrap text-text-primary">{message.content}</p>
                       </div>
                       {message.sources && message.sources.length > 0 && (
                         <div className="mt-3 pt-3 border-t border-border">
@@ -385,24 +513,20 @@ export default function Home() {
                             Sources:{' '}
                             {message.sources.map((source: any, i: number) => (
                               <span key={i} className="text-primary hover:underline cursor-pointer">
-                                {source.title || source.guest || 'Episode'}
+                                {source.episode || source.title || source.episode_title || source.guest || 'Episode'}
                               </span>
                             ))}
                           </p>
                         </div>
                       )}
-                      {message.artifact_ids && message.artifact_ids.length > 0 && (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {message.artifact_ids.map((artifactId: string) => (
-                            <button
-                              key={artifactId}
-                              onClick={() => handleArtifactClick(artifactId)}
-                              className="btn-ghost text-xs px-2 py-1 gap-1"
-                            >
-                              <FileText className="h-3 w-3" />
-                              Artifact
-                            </button>
-                          ))}
+                      {message.artifact_id && (
+                        <div className="mt-3">
+                          <button
+                            onClick={() => handleArtifactClick(message.artifact_id!)}
+                            className="btn-ghost text-xs px-3 py-1.5"
+                          >
+                            View Artifact
+                          </button>
                         </div>
                       )}
                       <p className="mt-1 text-xs text-text-muted">
@@ -421,7 +545,7 @@ export default function Home() {
                 <textarea
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  placeholder={isStreaming ? 'Streaming...' : 'Ask about product, growth, or startups...'}
+                  placeholder={isStreaming ? 'Streaming...' : 'Ask about product, growth, or create artifacts...'}
                   className="textarea flex-1"
                   rows={3}
                   disabled={isStreaming}
@@ -435,6 +559,7 @@ export default function Home() {
                 <button
                   type="submit"
                   disabled={!input.trim() || isStreaming}
+                  aria-label={isStreaming ? 'Stop generating' : 'Send message'}
                   className="btn-primary self-end mb-1"
                 >
                   {isStreaming ? <X className="h-4 w-4" /> : <Send className="h-4 w-4" />}
@@ -442,68 +567,44 @@ export default function Home() {
               </div>
               <div className="mt-2 flex flex-wrap gap-1 text-xs text-text-muted">
                 <kbd className="px-1.5 py-0.5 bg-surface-elevated rounded border border-border">Enter</kbd> to send •
-                <kbd className="px-1.5 py-0.5 bg-surface-elevated rounded border border-border">Shift+Enter</kbd> for new line •
-                <span className="text-primary">/ship30</span> for writing skill
+                <kbd className="px-1.5 py-0.5 bg-surface-elevated rounded border border-border">Shift+Enter</kbd> for new line
               </div>
             </form>
           </div>
 
           {/* Resize Handle */}
-          <div
-            onMouseDown={handleResize}
-            className="relative w-1 cursor-col-resize bg-border hover:bg-primary/50 transition-colors flex items-center justify-center"
-            style={{ width: '4px' }}
-            role="separator"
-            aria-label="Resize panes"
-            tabIndex={0}
-          >
-            <div className="w-px h-8 bg-border rounded-full" />
-          </div>
+          {showArtifact && (
+            <div
+              onMouseDown={handleResize}
+              className="relative w-1 cursor-col-resize bg-border hover:bg-primary/50 transition-colors hidden md:flex items-center justify-center"
+              style={{ width: '4px' }}
+              role="separator"
+              aria-label="Resize panes"
+              tabIndex={0}
+            >
+              <div className="w-px h-8 bg-border rounded-full" />
+            </div>
+          )}
 
           {/* Artifact Pane */}
-          <div
-            className={cn(
-              'flex flex-col border-l border-border bg-surface transition-all duration-200',
-              showArtifact ? 'w-[40%]' : 'w-0 overflow-hidden'
-            )}
-            style={{ width: showArtifact ? `${100 - splitRatio}%` : 0 }}
-          >
-            {selectedArtifact && (
-              <div className="flex flex-col h-full">
-                <div className="flex h-12 items-center justify-between px-4 border-b border-border">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-5 w-5 text-primary" />
-                    <span className="font-medium truncate max-w-[200px]">
-                      Artifact v{selectedArtifact.version}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button className="btn-ghost p-1.5" title="Copy">
-                      <Copy className="h-4 w-4" />
-                    </button>
-                    <button className="btn-ghost p-1.5" title="Download">
-                      <Download className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => { setShowArtifact(false); setSelectedArtifact(null) }}
-                      className="btn-ghost p-1.5"
-                      title="Close"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-                <div className="flex-1 relative overflow-hidden">
-                  <iframe
-                    srcDoc={selectedArtifact.content}
-                    sandbox="allow-scripts allow-forms"
-                    className="w-full h-full border-0"
-                    title="Artifact preview"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
+          {showArtifact && currentArtifact && (
+            <div
+              className="artifact-pane-host"
+              style={{ '--artifact-split': `${100 - splitRatio}%` } as React.CSSProperties}
+            >
+              <ArtifactViewer
+                artifact={currentArtifact}
+                versions={artifactVersions}
+                onSelectVersion={selected => setCurrentArtifact(selected)}
+                onClose={() => {
+                  setShowArtifact(false)
+                  setTimeout(() => {
+                    document.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+                  }, 50)
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

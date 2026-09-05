@@ -1,18 +1,5 @@
 import type { Metadata, Viewport } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
-import './styles/globals.css'
-
-const geistSans = Geist({
-  subsets: ['latin'],
-  variable: '--font-sans',
-  display: 'swap',
-})
-
-const geistMono = Geist_Mono({
-  subsets: ['latin'],
-  variable: '--font-mono',
-  display: 'swap',
-})
+import '../styles/globals.css'
 
 export const metadata: Metadata = {
   title: 'Lenny Growth Assistant',
@@ -29,7 +16,10 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
+    // Geist loads via the CSS font stack (see tailwind.config.js: 'Geist',
+    // 'system-ui', 'sans-serif'). next/font/google does not ship Geist in
+    // Next 14.2, so we rely on the local font with system fallbacks.
+    <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background text-text-primary antialiased">
         {children}
       </body>

@@ -273,8 +273,81 @@ The `validate_ship30_output` function performs lightweight structural validation
 - Emits the active skill identifier in the `start` event payload (`{"session_id": "...", "skill": "ship30"}`).
 - Persists both user requests and generated essays to the PostgreSQL `messages` table with complete JSONB `sources` citations.
 
-## 12. Decisions Intentionally Deferred (Phase 6+)
-- Hybrid search (BM25 + Dense) implementation.
-- Interactive HTML Artifact sandbox rendering and version tab viewer (Phase 6).
-- Sandboxed iframe preview with copy/download controls (Phase 6).
-- Multi-user authentication (RBAC).
+## 12. Artifact Architecture & Security System (Phase 6)
+
+Phase 6 implements the complete interactive artifact generation, streaming, rendering, versioning, and sandboxed preview system.
+
+### 12.1 Artifact Pipeline & Routing (`ArtifactSkill`)
+Artifact creation requests are identified via deterministic trigger detection in `SkillRouter`:
+- **Triggers**: Explicit `/artifact <prompt>` commands or natural language keywords such as `create a markdown checklist`, `create an html tool`, `build a component`, `create an interactive calculator`.
+- **Precedence**: Evaluated immediately following Ship 30 intent checks, ensuring specialized writing prompts retain their dedicated formatting while artifact generation activates for documents and interactive apps.
+- **Grounding Support**: The `ArtifactSkill` inspects the user query for Lenny podcast domain relevance. When grounding is warranted, it calls `retriever.retrieve(query)` and provides relevant transcript evidence inside `<transcript_context>` blocks. Pure standalone tools (e.g., calculators, timers) bypass transcript retrieval for minimal latency.
+- **Generation Formats**:
+  - `markdown`: Checklists, frameworks, strategy documents, guides, and tables.
+  - `html`: Single-file interactive applications containing embedded `<style>` and `<script>` blocks.
+
+### 12.2 Server-Sent Events (SSE) Streaming Protocol
+Artifact tokens are streamed in real time to the frontend via dedicated SSE events, bypassing the main chat message bubble:
+1. `event: start` -> `{"session_id": "...", "skill": "artifact"}`
+2. `event: status` -> `{"message": "Creating artifact..."}`
+3. `event: artifact_start` -> `{"id": "uuid", "title": "Checklist", "type": "markdown"|"html"}`
+4. `event: artifact_chunk` -> `{"content": "chunk text"}` (streamed progressively into the active Artifact Viewer pane)
+5. `event: artifact_done` -> `{"artifact_id": "uuid"}` (signals completion; frontend caches and updates message card link)
+6. `event: done` -> `{}` (closes stream)
+
+### 12.3 Persistence & Versioning Data Model
+Artifact records are persisted in the PostgreSQL `artifacts` table:
+```sql
+CREATE TABLE artifacts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    message_id UUID REFERENCES messages(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL,        -- 'html' | 'markdown'
+    title VARCHAR(255) NOT NULL,      -- e.g. 'Calculator'
+    content TEXT NOT NULL,            -- raw markup or markdown
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+- **Incremental Versioning**: When an artifact with the same `title` is generated or updated within the same `session_id`, the system queries the maximum existing `version` and increments it (`version = max_version + 1`).
+- **REST Retrieval**:
+  - `GET /api/artifacts/{id}`: Returns `{ id, session_id, message_id, type, title, content, version, created_at, updated_at }`.
+  - `GET /api/artifacts/versions/{session_id}/{title}`: Returns an array of all historical versions for the artifact, enabling instant switching via the viewer tabs.
+
+### 12.4 Client-Side Sandboxing & Isolation (HTML Artifacts)
+Security is paramount when rendering user-requested or LLM-generated HTML/JavaScript:
+- **Sandbox Attribute**: Rendered in an `<iframe>` with `sandbox="allow-scripts"`.
+- **Strictly No `allow-same-origin`**: Omitting `allow-same-origin` forces the iframe into an opaque, unique origin. Any attempts by scripts inside the iframe to access:
+  - `window.parent.document`
+  - `window.parent.localStorage`
+  - `window.parent.sessionStorage`
+  - `window.parent.cookie`
+  - `window.top`
+  will immediately throw a browser `SecurityError` (cross-origin DOMException).
+- **Navigation Isolation**: `allow-top-navigation` is deliberately excluded, preventing malicious artifacts from redirecting the parent window or executing clickjacking attacks.
+- **Form Submissions**: Forms are isolated within the sandbox context (`allow-forms` only if explicitly needed, default restricted).
+
+### 12.5 DOMPurify & Markdown Sanitization
+- Markdown content is rendered into React components using `react-markdown` and `remark-gfm`.
+- Embedded raw HTML is passed through `DOMPurify.sanitize()` configured with strict allowlists. Dangerous elements (`<script>`, `<object>`, `<embed>`, `<iframe>`, `<base>`) and inline event handlers (`onload`, `onerror`, `onclick`, `onmouseover`) are excised before DOM insertion.
+
+### 12.6 Payload Limits & Safety Safeguards
+- **5MB Size Limit**: Artifact content payloads are restricted to a maximum of 5,242,880 bytes (5MB). Requests exceeding this limit are rejected with HTTP 413 / `error` SSE event to prevent client and database denial-of-service.
+- **Client Cache**: The frontend maintains an in-memory `artifactsCacheRef` mapping artifact IDs to content and metadata. This provides zero-latency reopening even during active streaming or temporary network glitches.
+
+### 12.7 UI Layout & Responsive Adaptation
+- **Desktop (≥1024px)**: Coexisting side-by-side split pane (`.chat-pane-host` with `flex: 1 1 0%` and `.artifact-pane-host` with `min-width: 260px; max-width: 70%`). Both panes remain fully interactive simultaneously.
+- **Tablet (768px–1023px)**: Side-by-side layout with a collapsible navigation sidebar to maximize workspace. The artifact viewer retains a minimum width of 260px.
+- **Mobile (<768px)**: Off-canvas navigation drawer (`-translate-x-full` when closed, `translate-x-0` when open) and full-screen overlay artifact viewer (`z-50`) with no horizontal scroll overflow.
+
+### 12.8 Accessibility & Keyboard Navigation
+- Registered as an accessible region with `role="region"` and `aria-label="Artifact viewer"`.
+- Contains an explicit `title="Artifact Preview"` on the `<iframe>`.
+- Full keyboard trap prevention: `Escape` closes the viewer and returns focus to the chat textarea; tabs cycle cleanly across copy, download, raw/preview, and version buttons with high-contrast focus rings.
+
+## 13. Decisions Intentionally Deferred (Phase 7+)
+- Hybrid search (BM25 + Dense reciprocal rank fusion).
+- Web container / Node.js execution environment in browser (WebAssembly).
+- Multi-user authentication & workspace collaboration (RBAC).
+- Real-time collaborative artifact editing via CRDTs.

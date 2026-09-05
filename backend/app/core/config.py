@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     rag_similarity_threshold: float = Field(default=0.65, alias="RAG_SIMILARITY_THRESHOLD")
 
     session_ttl_days: int = Field(default=30, alias="SESSION_TTL_DAYS")
+    
+    # Artifact size limit in bytes (default 5MB)
+    artifact_max_bytes: int = Field(default=5242880, alias="ARTIFACT_MAX_BYTES")
 
     next_public_api_url: str = Field(default="http://localhost:8000", alias="NEXT_PUBLIC_API_URL")
     next_public_ws_url: str = Field(default="ws://localhost:8000", alias="NEXT_PUBLIC_WS_URL")

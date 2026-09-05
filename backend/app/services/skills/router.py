@@ -5,6 +5,7 @@ from app.models import Message
 from app.services.skills.base import BaseSkill
 from app.services.skills.grounded_qa import GroundedQASkill
 from app.services.skills.ship30 import Ship30Skill
+from app.services.skills.artifact import ArtifactSkill
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,14 @@ SHIP30_TRIGGERS = [
     r"\bmake\s+(this|that)\s+into\s+a\s+ship\s*30\b",
 ]
 
+# Patterns that signal artifact generation request
+ARTIFACT_TRIGGERS = [
+    r"^/artifact\b",
+    r"\b(create|generate|build|make)\s+(?:a|an)?\s*(?:[a-z0-9\-]+\s+){0,3}(markdown|html|interactive|calculator|dashboard|framework|memo|checklist|artifact|visualization)\b",
+    r"\bturn\s+(this|that)\s+into\s+(?:a|an)?\s*(?:[a-z0-9\-]+\s+){0,3}(markdown|html|framework|memo|artifact|calculator|dashboard|checklist)\b",
+    r"\bconvert.*into.*artifact\b",
+]
+
 
 class SkillRouter:
     """
@@ -30,6 +39,7 @@ class SkillRouter:
     def __init__(self):
         self.grounded_qa_skill = GroundedQASkill()
         self.ship30_skill = Ship30Skill()
+        self.artifact_skill = ArtifactSkill()
 
     def route(
         self,
@@ -57,6 +67,9 @@ class SkillRouter:
             if skill_name == "ship30":
                 resolved = self._resolve_topic(msg_clean, history)
                 return self.ship30_skill, resolved
+            elif skill_name == "artifact":
+                resolved = self._resolve_topic(msg_clean, history)
+                return self.artifact_skill, resolved
             elif skill_name in ("qa", "grounded_qa"):
                 return self.grounded_qa_skill, msg_clean
 
@@ -67,7 +80,14 @@ class SkillRouter:
                 resolved = self._resolve_topic(msg_clean, history)
                 return self.ship30_skill, resolved
 
-        # 3. Default: Grounded Q&A
+        # 3. Check Artifact triggers
+        for pattern in ARTIFACT_TRIGGERS:
+            if re.search(pattern, msg_clean, flags=re.IGNORECASE):
+                logger.info(f"SkillRouter matched Artifact trigger: '{pattern}'")
+                resolved = self._resolve_topic(msg_clean, history)
+                return self.artifact_skill, resolved
+
+        # 4. Default: Grounded Q&A
         logger.debug("SkillRouter defaulting to GroundedQASkill")
         return self.grounded_qa_skill, msg_clean
 

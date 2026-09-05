@@ -18,7 +18,7 @@
   }
 
   * {
-    @apply border-border;
+    border-color: var(--border, #3F3F46);
   }
 
   html {
@@ -99,6 +99,42 @@
 
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+
+  /*
+   * Responsive split-pane hosts (chat pane + artifact pane).
+   * Mobile (<768px): chat stays full-width and the artifact viewer becomes a
+   * full-screen panel (documented "bottom sheet" behavior). md+ (>=768px):
+   * documented split-pane ratio applies.
+   */
+  .chat-pane-host {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .artifact-pane-host {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background-color: #18181B; /* --surface */
+  }
+
+  @media (min-width: 768px) {
+    .chat-pane-host {
+      width: var(--chat-split, 60%);
+      flex: 1 1 0%;
+      min-width: 0;
+    }
+
+    .artifact-pane-host {
+      position: relative;
+      inset: auto;
+      width: var(--artifact-split, 40%);
+      min-width: 260px;
+      max-width: 70%;
+      border-left: 1px solid #3F3F46; /* --border */
+      background-color: transparent;
+    }
   }
 }
 

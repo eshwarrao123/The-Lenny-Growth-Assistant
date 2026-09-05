@@ -81,10 +81,10 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Responsive Breakpoints
-- **Desktop**: ≥1024px - Full split pane
-- **Tablet**: 768-1023px - Collapsible artifact pane
-- **Mobile**: <768px - Bottom sheet for artifacts
+### Responsive Breakpoints (Implemented)
+- **Desktop (≥1024px)**: Coexisting side-by-side split pane. The chat pane (`.chat-pane-host`) occupies `flex: 1 1 0%` with independent scrolling, while the artifact viewer pane (`.artifact-pane-host`) scales smoothly with a minimum width of 260px up to 70% of available viewport width. Neither pane overlaps or displaces the other.
+- **Tablet (768px–1023px)**: Side-by-side split pane layout with a collapsible navigation sidebar to conserve horizontal real estate. The artifact pane maintains at least 260px width.
+- **Mobile (<768px)**: Complete off-canvas sliding navigation drawer (`-translate-x-full` off-canvas when closed, `translate-x-0` when opened via hamburger button) and full-screen overlay artifact viewer (`fixed inset-0 z-50`) without horizontal scrolling or viewport overflow.
 
 ### Component Specifications
 
@@ -107,20 +107,24 @@
 - Token-by-token appearance (no typewriter effect)
 - "Stop" button appears during streaming
 
-#### Artifact Viewer
+#### Artifact Viewer (Phase 6 Implementation)
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Artifact Title                    v1.0  v1.1  v1.2  ⋮ │
+│  [Region: Artifact viewer]                              │
+│  [Title]  [Type Badge: HTML/MD]     [v1] [v2]  [Close]  │
+├─────────────────────────────────────────────────────────┤
+│  Toolbar: [Raw/Preview Toggle] [Copy] [Download]       │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│         [Sandboxed Iframe - fills available space]     │
+│  Markdown: Rendered GitHub Flavored Markdown (DOMPurify)│
+│  -- OR --                                               │
+│  HTML: Sandboxed <iframe> (title="Artifact Preview",    │
+│        sandbox="allow-scripts", no allow-same-origin)   │
 │                                                         │
-├─────────────────────────────────────────────────────────┤
-│  [Copy Code] [Download] [Open Fullscreen] [Close]      │
 └─────────────────────────────────────────────────────────┘
 ```
 
-#### Session Sidebar (Collapsible)
+#### Session Sidebar (Collapsible & Mobile Drawer)
 ```
 ┌────────────────────────────┐
 │  [+] New Chat              │
@@ -139,40 +143,39 @@
 
 ## Interaction Patterns (Emil Kowalski / Transitions.dev)
 
-### Pane Resize
-- Drag handle with visual feedback
-- Persist ratio in localStorage
-- Smooth transition (150ms ease-out)
+### Pane Coexistence & Split Layout
+- Desktop: Chat and Artifact Viewer panes live side-by-side without overlap. Chat flexes with `flex: 1 1 0%` and artifact pane occupies up to 70% width with a strict 260px minimum width.
+- Tablet: Preserves side-by-side view with collapsible navigation drawer.
+- Mobile: Instant snap off-canvas drawer (`-translate-x-full` to `translate-x-0`) and full-screen artifact overlay modal.
 
-### Artifact Open/Close
-- Slide in from right (desktop)
-- Slide up from bottom (mobile)
-- 200ms spring animation
-- ESC to close
+### Artifact Open / Close / Reopen Cycle
+- Opening: Automatically slides in and gains focus on `artifact_start` SSE event.
+- Closing: Close button (`aria-label="Close artifact viewer"`) or `Escape` key immediately closes the viewer and returns keyboard focus directly to the chat textarea (`#chat-input`).
+- Reopening: Clicking the "View Artifact" button on any message card immediately re-opens the cached or retrieved artifact in the viewer pane without state corruption.
+
+### Raw / Preview Switching
+- For Markdown artifacts, a toolbar toggle button allows users to switch between the sanitized rendered preview (`react-markdown` + `remark-gfm`) and the raw monospace markdown source (`<pre><code>`).
+
+### Version Navigation
+- When multiple versions of an artifact exist (e.g. revisions to a document), accessible pill tabs allow instantaneous switching. Version switching loads historical states via `/api/artifacts/versions/{session_id}/{title}`.
 
 ### Message Streaming
-- No artificial delay
-- Smooth scroll to bottom (auto-scroll when at bottom)
-- Preserve scroll position when not at bottom
-
-### Session Switch
-- Fade out old messages (100ms)
-- Fade in new messages (100ms)
-- Staggered entrance for message list
+- Server-Sent Events stream tokens in real-time.
+- Automatic scroll follows new tokens; manual upward scrolling pauses auto-scroll to preserve reading position.
 
 ### Skill Trigger
-- Slash command menu (`/ship30`, `/artifact`)
-- Keyboard navigable
-- Preview on hover
+- Slash command menu (`/ship30`, `/artifact`, `/qa`) or deterministic natural language pattern matching.
+- Immediate UI status indication ("Routing to Ship 30...", "Creating artifact...").
 
-## Accessibility
+## Accessibility & Assistive Technology
 
-- All interactive elements keyboard reachable
-- Focus visible with 2px outline (yellow-500)
-- ARIA labels on icon buttons
-- Live regions for streaming updates
-- Color contrast ≥4.5:1 for text
-- Reduced motion respected
+- **Semantic Landmarks**: The artifact viewer declares `role="region"` with `aria-label="Artifact viewer"`.
+- **Iframe Title**: All HTML artifact iframes declare `title="Artifact Preview"` satisfying WCAG 2.1 Principle 4.1.2.
+- **Keyboard Trap Prevention**: Tabbing cycles predictably through artifact action buttons (Raw/Preview, Copy, Download, Version Switcher, Close) and seamlessly transfers focus back to the chat textarea upon closing or escaping.
+- **Focus Rings**: High-contrast `focus-visible:ring-2 ring-yellow-500` outline on all interactive buttons, tabs, and input controls.
+- **Screen Reader Labels**: Icon-only buttons include descriptive `aria-label` attributes (e.g., `"Close artifact viewer"`, `"Copy artifact content"`, `"Download artifact"`).
+- **DOMPurify Sanitization**: Raw HTML within markdown is strictly scrubbed of scripts and event handlers before rendering.
+- **Color Contrast**: Main text exceeds WCAG AA 4.5:1 contrast against dark background.
 
 ## Dark Mode Only
 - Single theme (dark) per assignment
