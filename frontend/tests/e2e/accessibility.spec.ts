@@ -74,11 +74,19 @@ test.describe('Accessibility', () => {
 
     await sendMessage(page, 'Update the checklist with owners')
 
-    const versionSelect = page
-      .getByRole('region', { name: 'Artifact viewer' })
-      .getByLabel('Artifact version')
-    await expect(versionSelect).toBeVisible()
-    await expect(versionSelect).toHaveValue(MOCK_ARTIFACT_V2_ID)
+    // Version switcher is now a button group with proper ARIA labels
+    const viewer = page.getByRole('region', { name: 'Artifact viewer' })
+    const versionGroup = viewer.getByRole('group', { name: 'Artifact version' })
+    await expect(versionGroup).toBeVisible()
+    
+    // Verify individual version buttons are accessible
+    const v1Button = versionGroup.getByRole('button', { name: 'Version 1' })
+    const v2Button = versionGroup.getByRole('button', { name: 'Version 2' })
+    await expect(v1Button).toBeVisible()
+    await expect(v2Button).toBeVisible()
+    
+    // v2 should be active (pressed state)
+    await expect(v2Button).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('visible focus rings on artifact controls when tabbing', async ({ page }) => {

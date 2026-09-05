@@ -92,73 +92,87 @@ export function ArtifactViewer({
       className={`flex flex-col h-full bg-surface ${className}`}
     >
       {/* Header */}
-      <div className="flex h-14 items-center justify-between px-4 border-b border-border flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-surface-elevated text-text-muted uppercase">
+      <div className="flex flex-col border-b border-border flex-shrink-0 bg-surface">
+        <div className="flex h-14 items-center justify-between px-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="font-semibold truncate text-text-primary text-base">
+              {artifact.title || 'Artifact'}
+            </span>
+            <span className="text-xs font-mono px-2 py-0.5 rounded bg-surface-elevated text-text-muted uppercase border border-border">
               {artifact.type}
             </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="btn-ghost p-2 flex-shrink-0"
+            title="Close"
+            aria-label="Close artifact viewer"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        
+        <div className="flex items-center justify-between px-4 pb-3 gap-3">
+          <div className="flex items-center gap-2">
             {hasVersionHistory ? (
-              <select
-                value={artifact.id}
-                onChange={e => {
-                  const selected = versions!.find(v => v.id === e.target.value)
-                  if (selected) onSelectVersion!(selected)
-                }}
+              <div 
+                role="group" 
                 aria-label="Artifact version"
-                title="Artifact version"
-                className="text-xs font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-border bg-transparent focus-visible-ring cursor-pointer"
+                className="flex items-center gap-1 bg-surface-elevated rounded-lg p-1 border border-border"
               >
                 {versions!.map(v => (
-                  <option key={v.id} value={v.id}>
+                  <button
+                    key={v.id}
+                    onClick={() => onSelectVersion!(v)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-md text-xs font-mono transition-colors",
+                      artifact.id === v.id
+                        ? "bg-primary text-background font-semibold"
+                        : "text-text-muted hover:text-text-primary hover:bg-surface"
+                    )}
+                    aria-label={`Version ${v.version}`}
+                    aria-pressed={artifact.id === v.id}
+                  >
                     v{v.version}
-                  </option>
+                  </button>
                 ))}
-              </select>
+              </div>
             ) : (
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-primary/10 text-primary">
+              <span className="text-xs font-mono px-2.5 py-1 rounded-lg bg-primary/10 text-primary border border-primary/30">
                 v{artifact.version}
               </span>
             )}
           </div>
-          <span className="font-medium truncate text-text-primary">
-            {artifact.title || 'Artifact'}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1 flex-shrink-0">
-          <button
-            onClick={() => setShowRaw(!showRaw)}
-            className="btn-ghost p-2"
-            title={showRaw ? 'Show preview' : 'Show raw code'}
-            aria-label={showRaw ? 'Show preview' : 'Show raw code'}
-          >
-            {showRaw ? <Eye className="h-4 w-4" /> : <Code className="h-4 w-4" />}
-          </button>
-          <button
-            onClick={handleCopy}
-            className="btn-ghost p-2"
-            title="Copy content"
-            aria-label="Copy content"
-          >
-            <Copy className="h-4 w-4" />
-          </button>
-          <button
-            onClick={handleDownload}
-            className="btn-ghost p-2"
-            title="Download"
-            aria-label="Download artifact"
-          >
-            <Download className="h-4 w-4" />
-          </button>
-          <button
-            onClick={onClose}
-            className="btn-ghost p-2"
-            title="Close"
-            aria-label="Close artifact viewer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowRaw(!showRaw)}
+              className={cn(
+                "btn-ghost p-2 h-9 transition-colors",
+                showRaw && "bg-surface-elevated"
+              )}
+              title={showRaw ? 'Show preview' : 'Show raw code'}
+              aria-label={showRaw ? 'Show preview' : 'Show raw code'}
+            >
+              {showRaw ? <Eye className="h-4 w-4" /> : <Code className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={handleCopy}
+              className="btn-ghost p-2 h-9"
+              title="Copy content"
+              aria-label="Copy content"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleDownload}
+              className="btn-ghost p-2 h-9"
+              title="Download"
+              aria-label="Download artifact"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
 

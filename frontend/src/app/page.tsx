@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, X, Plus, ChevronLeft, ChevronRight, Settings, Sparkles, Menu } from 'lucide-react'
+import { Send, X, Plus, ChevronLeft, ChevronRight, Settings, Sparkles, Menu, Code } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ArtifactViewer } from '@/components/ArtifactViewer'
 
@@ -453,16 +453,21 @@ export default function Home() {
             className="chat-pane-host flex flex-col overflow-hidden"
             style={{ '--chat-split': showArtifact ? `${splitRatio}%` : '100%' } as React.CSSProperties}
           >
-            <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            <div className="flex-1 overflow-y-auto p-4 space-y-8">
               {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-text-muted">
-                  <Sparkles className="h-12 w-12 mb-4 opacity-50" />
-                  <p className="text-lg font-medium">Welcome to Lenny Growth Assistant</p>
-                  <p className="text-sm mt-2 text-center max-w-md">
-                    Ask questions about product, growth, and startups grounded in Lenny's Podcast transcripts.
-                    Try <span className="text-primary">/ship30</span> for essays or <span className="text-primary">/artifact</span> for frameworks.
+                <div className="flex flex-col items-center justify-center h-full text-text-muted px-4">
+                  <Sparkles className="h-16 w-16 mb-6 text-primary/40" />
+                  <h2 className="text-2xl font-semibold text-text-primary mb-3">
+                    Welcome to Lenny Growth Assistant
+                  </h2>
+                  <p className="text-base text-text-secondary text-center max-w-lg leading-relaxed mb-8">
+                    Ask questions about product, growth, and startups grounded in 200+ episodes of Lenny's Podcast.
+                    Get answers with source citations, Ship 30 essays, or interactive frameworks.
                   </p>
-                  <div className="mt-6 flex flex-wrap gap-2 justify-center">
+                  <div className="space-y-2 w-full max-w-md">
+                    <p className="text-sm font-medium text-text-muted uppercase tracking-wide mb-3">
+                      Try asking:
+                    </p>
                     {[
                       'How do I improve retention?',
                       'Create a PLG framework',
@@ -472,7 +477,7 @@ export default function Home() {
                       <button
                         key={i}
                         onClick={() => setInput(suggestion)}
-                        className="btn-secondary text-xs px-3 py-1"
+                        className="w-full text-left px-4 py-3 rounded-lg bg-surface-elevated hover:bg-border transition-colors text-sm text-text-primary border border-transparent hover:border-border"
                       >
                         {suggestion}
                       </button>
@@ -484,69 +489,103 @@ export default function Home() {
                   <div
                     key={message.id}
                     className={cn(
-                      'flex gap-3 max-w-3xl mx-auto w-full',
-                      message.role === 'user' && 'flex-row-reverse'
+                      'flex gap-4 max-w-4xl mx-auto w-full',
+                      message.role === 'user' ? 'justify-end' : 'justify-start'
                     )}
                   >
-                    <div
-                      className={cn(
-                        'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium',
-                        message.role === 'user'
-                          ? 'bg-primary text-background'
-                          : 'bg-surface-elevated text-text-secondary'
-                      )}
-                    >
-                      {message.role === 'user' ? 'U' : 'L'}
-                    </div>
-                    <div
-                      className={cn(
-                        'flex-1 min-w-0',
-                        message.role === 'user' ? 'text-right' : 'text-left'
-                      )}
-                    >
-                      <div className="prose prose-invert max-w-none">
-                        <p className="whitespace-pre-wrap text-text-primary">{message.content}</p>
+                    {message.role === 'assistant' && (
+                      <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/20">
+                        <Sparkles className="h-4 w-4 text-primary" />
                       </div>
-                      {message.sources && message.sources.length > 0 && (
-                        <div className="mt-3 pt-3 border-t border-border">
-                          <p className="text-xs text-text-muted flex flex-wrap gap-2">
-                            Sources:{' '}
-                            {message.sources.map((source: any, i: number) => (
-                              <span key={i} className="text-primary hover:underline cursor-pointer">
-                                {source.episode || source.title || source.episode_title || source.guest || 'Episode'}
-                              </span>
-                            ))}
-                          </p>
+                    )}
+                    <div
+                      className={cn(
+                        'flex-1 min-w-0 max-w-[85%]',
+                        message.role === 'user' && 'flex flex-col items-end'
+                      )}
+                    >
+                      {message.role === 'user' ? (
+                        <div className="px-4 py-3 rounded-2xl bg-primary text-background">
+                          <p className="whitespace-pre-wrap text-sm leading-relaxed font-medium">{message.content}</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="prose prose-invert max-w-none">
+                            <p className="whitespace-pre-wrap text-text-primary text-base leading-relaxed">{message.content}</p>
+                          </div>
+                          {message.sources && message.sources.length > 0 && (
+                            <div className="rounded-lg bg-surface-elevated border border-border p-3">
+                              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">
+                                Grounded in:
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {message.sources.map((source: any, i: number) => (
+                                  <button
+                                    key={i}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-surface hover:bg-border transition-colors text-xs text-text-secondary hover:text-primary border border-border"
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-primary/60" />
+                                    {source.episode || source.title || source.episode_title || source.guest || 'Episode'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {message.artifact_id && (
+                            <button
+                              onClick={() => handleArtifactClick(message.artifact_id!)}
+                              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-colors text-sm font-medium"
+                            >
+                              <Code className="h-4 w-4" />
+                              View Artifact
+                            </button>
+                          )}
                         </div>
                       )}
-                      {message.artifact_id && (
-                        <div className="mt-3">
-                          <button
-                            onClick={() => handleArtifactClick(message.artifact_id!)}
-                            className="btn-ghost text-xs px-3 py-1.5"
-                          >
-                            View Artifact
-                          </button>
-                        </div>
-                      )}
-                      <p className="mt-1 text-xs text-text-muted">
+                      <p className={cn(
+                        "mt-1.5 text-xs text-text-muted",
+                        message.role === 'user' && 'text-right'
+                      )}>
                         {new Date(message.created_at).toLocaleTimeString()}
                       </p>
                     </div>
+                    {message.role === 'user' && (
+                      <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-primary flex items-center justify-center text-background font-semibold text-sm">
+                        U
+                      </div>
+                    )}
                   </div>
                 ))
+              )}
+              {isStreaming && messages[messages.length - 1]?.role === 'user' && (
+                <div className="flex gap-4 max-w-4xl mx-auto w-full">
+                  <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/20">
+                    <Sparkles className="h-4 w-4 text-primary animate-pulse" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 text-text-muted text-sm">
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <div className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <div className="w-2 h-2 rounded-full bg-primary/60 animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                      <span>Thinking...</span>
+                    </div>
+                  </div>
+                </div>
               )}
               <div ref={messagesEndRef} />
             </div>
 
             {/* Input Area */}
             <form onSubmit={handleSendMessage} className="p-4 border-t border-border bg-surface">
-              <div className="flex gap-2">
+              <div className="flex gap-3 items-end">
                 <textarea
+                  id="chat-input"
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   placeholder={isStreaming ? 'Streaming...' : 'Ask about product, growth, or create artifacts...'}
-                  className="textarea flex-1"
+                  className="textarea flex-1 resize-none"
                   rows={3}
                   disabled={isStreaming}
                   onKeyDown={e => {
@@ -560,14 +599,26 @@ export default function Home() {
                   type="submit"
                   disabled={!input.trim() || isStreaming}
                   aria-label={isStreaming ? 'Stop generating' : 'Send message'}
-                  className="btn-primary self-end mb-1"
+                  className="btn-primary h-11 px-4"
                 >
-                  {isStreaming ? <X className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                  {isStreaming ? <X className="h-5 w-5" /> : <Send className="h-5 w-5" />}
                 </button>
               </div>
-              <div className="mt-2 flex flex-wrap gap-1 text-xs text-text-muted">
-                <kbd className="px-1.5 py-0.5 bg-surface-elevated rounded border border-border">Enter</kbd> to send •
-                <kbd className="px-1.5 py-0.5 bg-surface-elevated rounded border border-border">Shift+Enter</kbd> for new line
+              <div className="mt-3 flex items-center gap-2 text-xs text-text-muted">
+                <div className="flex items-center gap-1">
+                  <kbd className="px-2 py-1 bg-surface-elevated rounded text-xs font-mono border border-border">Enter</kbd>
+                  <span>Send</span>
+                </div>
+                <span className="text-border">•</span>
+                <div className="flex items-center gap-1">
+                  <kbd className="px-2 py-1 bg-surface-elevated rounded text-xs font-mono border border-border">Shift+Enter</kbd>
+                  <span>New line</span>
+                </div>
+                <div className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded bg-surface-elevated border border-border">
+                  <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                  <span className="text-xs font-medium">Local</span>
+                  <span className="text-xs text-text-muted">Ollama</span>
+                </div>
               </div>
             </form>
           </div>
