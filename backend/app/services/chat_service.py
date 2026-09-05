@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import uuid
 from typing import AsyncGenerator, Dict, Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +12,9 @@ from app.rag.retriever import TranscriptRetriever
 from app.services.skills import SkillRouter, SkillContext
 from app.core.exceptions import SessionNotFoundError, InvalidRequestError
 from app.core.config import get_settings
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("chat_service")
 
 class ChatService:
     def __init__(self, session: AsyncSession):
@@ -84,6 +86,15 @@ class ChatService:
         citations = []
         current_artifact = None
         artifact_content = ""
+        start_time = time.perf_counter()
+
+        logger.info(
+            "chat_stream_started",
+            session_id=str(session_id),
+            skill=skill.name,
+            provider=provider_name,
+            message_len=len(user_message),
+        )
 
         # Emit start event to notify client of active skill and session
         yield f"event: start\ndata: {json.dumps({'session_id': str(session_id), 'skill': skill.name})}\n\n"
@@ -125,7 +136,17 @@ class ChatService:
                 yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
         except Exception as e:
-            logger.error(f"Execution failed for skill {skill.name}: {e}")
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            logger.error(
+                "chat_stream_failed",
+                session_id=str(session_id),
+                skill=skill.name,
+                provider=provider_name,
+                error_type=type(e).__name__,
+                error_code="skill_execution_error",
+                error_message=str(e),
+                total_latency_ms=elapsed_ms,
+            )
             yield f"event: error\ndata: {json.dumps({'code': 'skill_execution_error', 'message': str(e)})}\n\n"
             yield f"event: done\ndata: {{}}\n\n"
             return
@@ -147,6 +168,18 @@ class ChatService:
                 artifact_id=current_artifact["id"],
                 message_id=db_assistant_msg.id
             )
+
+        total_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        logger.info(
+            "chat_stream_completed",
+            session_id=str(session_id),
+            skill=skill.name,
+            provider=provider_name,
+            retrieval_count=len(citations),
+            content_length=len(assistant_content),
+            has_artifact=bool(current_artifact),
+            total_latency_ms=total_latency_ms,
+        )
 
     async def _persist_artifact(
         self,

@@ -38,11 +38,32 @@ class ChatSessionDetail(ChatSessionBase):
     artifacts: List[ArtifactBase] = []
 
 class ChatRequest(BaseModel):
-    session_id: UUID4
-    message: str
-    provider: Literal["ollama", "openai"] = "ollama"
-    skill: Optional[Literal["auto", "qa", "ship30", "artifact"]] = "auto"
-    artifact_type: Optional[Literal["markdown", "html"]] = None
+    session_id: UUID4 = Field(
+        ...,
+        description="Target chat session UUID.",
+        examples=["550e8400-e29b-41d4-a716-446655440000"]
+    )
+    message: str = Field(
+        ...,
+        min_length=1,
+        description="User question, follow-up prompt, or skill trigger command.",
+        examples=["What does Elena Verna say about product-led sales?"]
+    )
+    provider: Literal["ollama", "openai"] = Field(
+        default="ollama",
+        description="LLM provider: 'ollama' (local default) or 'openai' (cloud).",
+        examples=["ollama"]
+    )
+    skill: Optional[Literal["auto", "qa", "ship30", "artifact"]] = Field(
+        default="auto",
+        description="Target capability skill override. 'auto' uses deterministic intent routing.",
+        examples=["auto"]
+    )
+    artifact_type: Optional[Literal["markdown", "html"]] = Field(
+        default=None,
+        description="Explicit artifact format preference if invoking the artifact skill directly.",
+        examples=["markdown"]
+    )
 
 class CreateSessionResponse(BaseModel):
     id: UUID4

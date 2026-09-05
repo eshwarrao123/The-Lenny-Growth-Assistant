@@ -20,7 +20,7 @@ test.describe('Core application flows', () => {
   test('application loads with chat UI', async ({ page }) => {
     await page.goto('/')
     await expect(page).toHaveTitle('Lenny Growth Assistant')
-    await expect(page.getByRole('heading', { name: 'Lenny Growth' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Lenny Growth', exact: true })).toBeVisible()
     await expect(page.getByText('Welcome to Lenny Growth Assistant')).toBeVisible()
     await expect(page.locator('textarea')).toBeVisible()
   })
@@ -103,17 +103,19 @@ test.describe('Core application flows', () => {
     await expect(viewer).toBeVisible()
 
     // Current artifact is v2
-    const versionSelect = viewer.getByLabel('Artifact version')
-    await expect(versionSelect).toBeVisible()
-    await expect(versionSelect).toHaveValue(MOCK_ARTIFACT_V2_ID)
+    const versionGroup = viewer.getByRole('group', { name: 'Artifact version' })
+    await expect(versionGroup).toBeVisible()
+    const v2Button = versionGroup.getByRole('button', { name: 'Version 2' })
+    await expect(v2Button).toHaveAttribute('aria-pressed', 'true')
 
     // Switch to v1 and verify content swaps
-    await versionSelect.selectOption({ label: 'v1' })
+    const v1Button = versionGroup.getByRole('button', { name: 'Version 1' })
+    await v1Button.click()
     await expect(viewer.getByRole('heading', { name: 'Growth Checklist', exact: true })).toBeVisible()
     await expect(viewer.getByText('Instrument the funnel', { exact: true })).toBeVisible()
 
     // Switch back to v2
-    await versionSelect.selectOption({ label: 'v2' })
+    await v2Button.click()
     await expect(viewer.getByText('Instrument the funnel (Data)')).toBeVisible()
   })
 

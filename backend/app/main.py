@@ -1,3 +1,4 @@
+from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,8 +31,8 @@ def create_app() -> FastAPI:
 
     from app.api import chat, sessions, artifacts
     from app.providers.factory import get_llm_provider
-    from sqlalchemy.future import select
-    from app.models import Episode
+    from sqlalchemy import text
+    from fastapi import Response, status
 
     app.include_router(chat.router)
     app.include_router(sessions.router)
@@ -46,40 +47,71 @@ def create_app() -> FastAPI:
         await close_db()
 
     @app.get("/api/health")
-    async def health() -> dict[str, str]:
-        # Lightweight DB check
+    async def health(response: Response) -> dict[str, Any]:
+        """
+        Operational health check.
+        Lightweight inspection of database connectivity and LLM provider reachability.
+        Returns HTTP 200 (healthy/degraded) or HTTP 503 (unavailable).
+        """
+        # 1. Primary Database check (SELECT 1)
         db_status = "ok"
         try:
             from app.core.database import async_session_maker
             async with async_session_maker() as session:
-                await session.execute(select(Episode).limit(1))
-        except Exception as e:
-            db_status = "error"
+                await session.execute(text("SELECT 1"))
+        except Exception:
+            db_status = "unavailable"
 
-        # Lightweight provider checks
+        # 2. Ollama Provider check (tags query)
         ollama_status = "ok"
+        ollama_details = {}
         try:
             ollama = get_llm_provider("ollama")
-            if not await ollama.health_check():
+            if hasattr(ollama, "detailed_health_check"):
+                ollama_details = await ollama.detailed_health_check()
+                ollama_status = ollama_details.get("status", "ok")
+            elif not await ollama.health_check():
                 ollama_status = "degraded"
         except Exception:
-            ollama_status = "error"
-            
-        openai_status = "ok"
+            ollama_status = "unavailable"
+
+        # 3. Optional Cloud Provider check
+        openai_status = "unconfigured"
         try:
             openai = get_llm_provider("openai")
-            if not await openai.health_check():
+            if await openai.health_check():
+                openai_status = "ok"
+            else:
                 openai_status = "missing_key"
         except Exception:
-            openai_status = "error"
+            openai_status = "unavailable"
 
-        overall_status = "ok" if db_status == "ok" else "degraded"
+        # 4. Overall status determination
+        if db_status == "unavailable":
+            overall_status = "unavailable"
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        elif ollama_status == "ok":
+            overall_status = "healthy"
+        else:
+            overall_status = "degraded"
 
         return {
             "status": overall_status,
+            "application": "ok",
             "db": db_status,
             "ollama": ollama_status,
-            "openai": openai_status
+            "openai": openai_status,
+            "components": {
+                "database": {"status": db_status},
+                "ollama": {
+                    "status": ollama_status,
+                    "model": settings.ollama_model,
+                    "embedding_model": settings.ollama_embedding_model,
+                    **ollama_details,
+                },
+                "openai": {"status": openai_status},
+            },
+            "environment": settings.app_env,
         }
 
     return app

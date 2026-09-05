@@ -58,10 +58,16 @@ docker-compose.override.yml
 coverage/
 htmlcov/
 .playwright/
+test-results/
+playwright-report/
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
 
 # Generated artifacts
 artifacts/
 generated/
+PHASE_6_REPORT.md
 
 # Transcripts (large data)
 data/transcripts/

@@ -182,21 +182,25 @@ Server-Sent Events (SSE) stream highly structured JSON payloads to the frontend.
 * `POST /api/chat`: Expects `{ "session_id": "uuid", "message": "str", "provider": "ollama|openai" }`. Returns `Content-Type: text/event-stream`.
 
 ### 6.2 Health & Observability
-* `GET /api/health`: Returns detailed dependency status `{ "status": "ok", "db": "ok", "ollama": "ok" }`. 
+* `GET /api/health`: Returns detailed multi-tier operational status:
+  - `healthy` (HTTP 200): PostgreSQL database reachable via `SELECT 1`, Ollama reachable with both `qwen2.5:7b` chat model and `nomic-embed-text` embedding model verified via `/api/tags`.
+  - `degraded` (HTTP 200): Database reachable, but one LLM model is missing or optional cloud provider is unconfigured.
+  - `unavailable` (HTTP 503): Primary PostgreSQL database unreachable. Triggers container orchestrator failure detection without leaking credentials.
 
 ## 7. Security Boundaries
 
 * **User Input**: Sanitized and parameterized via SQLAlchemy.
 * **Transcripts**: Evaluated as untrusted `<context>` chunks to prevent prompt injection overriding core agent instructions.
-* **HTML Artifacts**: Strictly sandboxed on the client-side via `<iframe sandbox="allow-scripts allow-forms">` (explicitly missing `allow-same-origin`) to ensure zero access to parent DOM/cookies.
-* **Secrets**: Managed purely server-side via `.env` (Pydantic `BaseSettings`).
+* **HTML Artifacts**: Strictly sandboxed on the client-side via `<iframe sandbox="allow-scripts">` (explicitly omitting `allow-same-origin`) to ensure zero access to parent DOM, storage, or cookies.
+* **Secrets**: Managed purely server-side via `.env` (Pydantic `BaseSettings`) with structured logging filters masking sensitive keys.
 
 ## 8. Docker Topology
 
-* `postgres`: Official `pgvector/pgvector:pg16` image on port `5432`.
-* `backend`: FastAPI Python container. Connects to `postgres:5432` and host Ollama via `host.docker.internal:11434`.
-* `frontend`: Next.js Node container on port `3000`.
-* **Host OS**: Ollama runs directly on the host to avoid GPU passthrough complexities.
+* `postgres`: Official `pgvector/pgvector:pg16` image on port `5432` with volume `postgres_data` and healthcheck `pg_isready -U postgres -d lenny`.
+* `backend`: FastAPI Python container. Connects to `postgres:5432` and host Ollama via `http://host.docker.internal:11434`. Configured with `extra_hosts: ["host.docker.internal:host-gateway"]` for seamless cross-platform Linux/WSL2/Windows host gateway access, plus container healthcheck inspecting `/api/health`.
+* `frontend`: Next.js Node container on port `3000`, configured with `depends_on: { backend: { condition: service_healthy } }`.
+* **Host OS**: Ollama runs directly on the host to maximize hardware capability and avoid GPU passthrough complexities.
+* **Network**: Dedicated bridge network `lenny-network` isolating internal inter-service traffic.
 
 ## 9. Knowledge Base Ingestion Pipeline
 * **Source**: `https://github.com/ChatPRD/lennys-podcast-transcripts` (303 episode transcripts).
@@ -346,7 +350,29 @@ Security is paramount when rendering user-requested or LLM-generated HTML/JavaSc
 - Contains an explicit `title="Artifact Preview"` on the `<iframe>`.
 - Full keyboard trap prevention: `Escape` closes the viewer and returns focus to the chat textarea; tabs cycle cleanly across copy, download, raw/preview, and version buttons with high-contrast focus rings.
 
-## 13. Decisions Intentionally Deferred (Phase 7+)
+## 14. Production Hardening, Logging & Observability (Phase 8)
+
+Phase 8 hardens the application for deterministic evaluator startup, operational diagnostics, and resilient recovery.
+
+### 14.1 Multi-Tier Health Check System
+The `/api/health` endpoint serves as an active readiness probe for Docker Compose and evaluators:
+- **Fast Database Probe**: Executes `SELECT 1` without table scans. If unreachable, immediately signals `status: "unavailable"` and HTTP 503.
+- **Model Registry Inspection**: Verifies presence of both chat model (`qwen2.5:7b`) and embedding model (`nomic-embed-text`) via `/api/tags` with a 5-second timeout, avoiding costly generation latency during health polls.
+- **Degraded Execution Awareness**: Distinguishes between critical infrastructure failure (database offline) and non-blocking dependency absence (cloud API keys unconfigured).
+
+### 14.2 Structured Logging & Metric Telemetry
+Configured using `structlog` to emit JSON in non-interactive environments and colored output in terminal sessions:
+- **Structured Fields**: Every chat generation emits `session_id`, `skill`, `provider`, `message_len`, `retrieval_count`, `has_artifact`, and `total_latency_ms`.
+- **Sensitive Data Scrubbing**: An automated log processor inspects all event dictionaries, redacting authorization headers, API keys, passwords, session tokens, and cookie strings to `[REDACTED]`.
+- **Payload Truncation**: Prevents multi-kilobyte transcript chunks or prompt bodies from polluting operational log streams.
+
+### 14.3 Error Handling & Failure Boundaries
+- **Database Failures**: Cleanly surfaces connection drops with fallback error states in SSE stream (`event: error\ndata: {"code": "database_error"}`).
+- **LLM Interruptions & Timeouts**: Configured with explicit `httpx.Timeout(300.0, connect=30.0)` tuned for CPU-based Ollama execution. Client stream disruptions terminate async generators cleanly without leaking connections.
+- **Deterministic Migrations**: Database schema creation is strictly managed via Alembic (`002_phase2_schema`). The application startup validates migration state without running destructive drops.
+- **Operational Runbook**: Standard operating procedures, failure remediation workflows, and disaster recovery commands are documented in `docs/runbook.md`.
+
+## 15. Decisions Intentionally Deferred (Post-Phase 8)
 - Hybrid search (BM25 + Dense reciprocal rank fusion).
 - Web container / Node.js execution environment in browser (WebAssembly).
 - Multi-user authentication & workspace collaboration (RBAC).

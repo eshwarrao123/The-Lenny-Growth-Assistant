@@ -86,60 +86,53 @@
 - **Tablet (768px–1023px)**: Side-by-side split pane layout with a collapsible navigation sidebar to conserve horizontal real estate. The artifact pane maintains at least 260px width.
 - **Mobile (<768px)**: Complete off-canvas sliding navigation drawer (`-translate-x-full` off-canvas when closed, `translate-x-0` when opened via hamburger button) and full-screen overlay artifact viewer (`fixed inset-0 z-50`) without horizontal scrolling or viewport overflow.
 
-### Component Specifications
+### Component Inventory
 
-#### Chat Message
-```
-┌─────────────────────────────────────────────────────────┐
-│  [Avatar]  Assistant                          [Copy]    │
-│                                                         │
-│  Response content with markdown rendering...           │
-│                                                         │
-│  ─────────────────────────────────────────────────      │
-│  Sources: Episode 42 (Lenny Rachitsky) • Episode 15... │
-│                                                         │
-│  [Artifact badge] [Regenerate] [Thumbs up/down]        │
-└─────────────────────────────────────────────────────────┘
-```
+#### 1. SplitPane Layout
+- **Desktop (≥1024px)**: Coexisting side-by-side split pane (`.chat-pane-host` occupies `flex: 1 1 0%` with independent scrolling; `.artifact-pane-host` scales smoothly with a minimum width of 260px up to 70% of available viewport width). Neither pane overlaps or displaces the other.
+- **Tablet (768px–1023px)**: Side-by-side split pane layout with a collapsible navigation sidebar to conserve horizontal real estate. The artifact pane maintains at least 260px width.
+- **Mobile (<768px)**: Full-screen overlay artifact viewer (`fixed inset-0 z-50`) without horizontal scrolling or viewport overflow.
 
-#### Streaming State
-- Skeleton shimmer while loading first token
-- Token-by-token appearance (no typewriter effect)
-- "Stop" button appears during streaming
+#### 2. Navigation Drawer (Mobile & Collapsible Sidebar)
+- **State**: Toggled via hamburger button or collapse arrow; on mobile, slides completely off-canvas using `-translate-x-full` transition when closed and `translate-x-0` when opened.
+- **Contents**: "New Chat" primary action button, session list grouped chronologically, settings trigger, and collapse/expand controls.
 
-#### Artifact Viewer (Phase 6 Implementation)
-```
-┌─────────────────────────────────────────────────────────┐
-│  [Region: Artifact viewer]                              │
-│  [Title]  [Type Badge: HTML/MD]     [v1] [v2]  [Close]  │
-├─────────────────────────────────────────────────────────┤
-│  Toolbar: [Raw/Preview Toggle] [Copy] [Download]       │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Markdown: Rendered GitHub Flavored Markdown (DOMPurify)│
-│  -- OR --                                               │
-│  HTML: Sandboxed <iframe> (title="Artifact Preview",    │
-│        sandbox="allow-scripts", no allow-same-origin)   │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
+#### 3. Chat & Message List
+- **Scroll Container**: Independent vertical scroll with auto-scroll lock to the bottom during active SSE streaming. Manual scroll upward disengages auto-scroll to preserve reading position.
+- **Message Bubble (User)**: Right-aligned pill in primary Lenny yellow (`bg-primary text-background`), medium font weight, `rounded-2xl` styling.
+- **Message Bubble (Assistant)**: Left-aligned, preceded by an avatar badge with `Sparkles` icon (`bg-primary/10 border-primary/20`). Rendered using Tailwind typography prose classes (`prose prose-invert max-w-none`) supporting Markdown headings, lists, bold text, and code blocks.
 
-#### Session Sidebar (Collapsible & Mobile Drawer)
-```
-┌────────────────────────────┐
-│  [+] New Chat              │
-│  ────────────────────────  │
-│  Today                     │
-│  ├─ Product Strategy Q&A  │
-│  ├─ Writing Exercise #3   │
-│  ────────────────────────  │
-│  This Week                 │
-│  ├─ Growth Metrics Deep...│
-│  └─ Retention Analysis    │
-│  ────────────────────────  │
-│  [Search sessions...]      │
-└────────────────────────────┘
-```
+#### 4. SourceCitations
+- **Trigger**: Rendered at the foot of assistant messages when `sources` array is present in the API response or SSE stream.
+- **Layout**: Elevated container (`bg-surface-elevated border-border p-3 rounded-lg`) with label `"Sources (Grounded in):"` followed by interactive pill tags.
+- **Pill Content**: Small badge displaying guest name, episode title, and speaker label with a pulsing accent dot (`w-1.5 h-1.5 rounded-full bg-primary/60`).
+
+#### 5. Chat Input & Skill Triggers
+- **Input Textarea**: Auto-resizing multi-line textarea (`bg-surface border-border focus:border-primary`) with placeholder `"Ask about product, growth, or create artifacts..."`.
+- **Keybindings**: `Enter` sends message; `Shift+Enter` inserts newline.
+- **Skill Suggestions & Triggers**: Quick-action buttons (`/ship30 Write about onboarding`, `Create a PLG framework`, `How do I improve retention?`, `Make a pricing calculator`) populate the input instantly.
+- **Send Button**: High-contrast icon button (`bg-primary text-background hover:bg-primary-hover`) disabled when input is empty or when stream is active.
+
+#### 6. ProviderSelector
+- **Location**: Top bar / settings header.
+- **Options**: Local default (`Ollama (qwen2.5:7b)`), Cloud providers (`OpenAI (gpt-4o)`, `Anthropic (claude-3-5-sonnet)`).
+- **Indicators**: Visual status badge indicating whether provider is currently reachable, active, or missing API keys.
+
+#### 7. ArtifactViewer
+- **Region**: Semantic landmark `<aside role="region" aria-label="Artifact viewer">`.
+- **Header Toolbar**:
+  - Title and type badge (`HTML` in green, `MARKDOWN` in yellow).
+  - Version switcher buttons.
+  - Raw / Preview view mode toggle (`Eye` / `Code` icons).
+  - One-click Copy (with temporary checkmark feedback).
+  - Direct Download (`.md` / `.html` with appropriate MIME headers).
+  - Close button (`X` icon, `Escape` key trigger).
+- **Markdown Mode**: Rendered via `react-markdown` + `remark-gfm`, strictly sanitized with client-side `DOMPurify` to forbid un-whitelisted scripts and inline handlers.
+- **HTML Mode**: Rendered via `SandboxedIframe` with `sandbox="allow-scripts"` (strictly omitting `allow-same-origin`), ensuring zero access to parent cookies, local storage, or DOM.
+
+#### 8. VersionHistory (Version Switcher)
+- **Component**: Accessible button group (`role="group" aria-label="Artifact version"`) inside the artifact header.
+- **Interactions**: Allows switching between version states (`v1`, `v2`, ...). Active version receives `aria-pressed="true"` and `bg-primary text-background` styling. Historical versions are fetched on-demand or loaded from client cache.
 
 ## Interaction Patterns (Emil Kowalski / Transitions.dev)
 
@@ -211,12 +204,13 @@
 - No loops, no infinite animations
 - Respect `prefers-reduced-motion`
 
-## Decisions to Validate
+## Architecture Decisions (Final Status)
 
-| Decision | Status | Notes |
-|----------|--------|-------|
-| Font loading strategy | To validate | Self-host Geist vs CDN |
-| Animation library | To validate | Framer Motion vs CSS only |
-| Markdown renderer | To validate | React-markdown + plugins |
-| Syntax highlighting | To validate | Shiki vs Prism |
-| Virtualization for messages | To validate | react-window if needed |
+| Decision | Status | Implementation Notes |
+|----------|--------|----------------------|
+| Typography | Resolved | System sans-serif font stack with Geist fallbacks for maximum performance and zero layout shift |
+| Animation & Motion | Resolved | Native CSS transitions and Tailwind utility classes; zero extraneous bundle weight |
+| Markdown Rendering | Resolved | `react-markdown` with `remark-gfm` and strict client-side DOMPurify sanitization |
+| Syntax Highlighting | Resolved | Styled `<pre><code>` blocks via Tailwind Typography `prose prose-invert` for dark mode consistency |
+| Message Scroll Management | Resolved | Native browser scroll anchoring with smooth `scrollIntoView` and user-scroll override detection |
+| Iframe Sandboxing | Resolved | `<iframe sandbox="allow-scripts">` (strictly omitting `allow-same-origin`) to prevent token/cookie/storage access |

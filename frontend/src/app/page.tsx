@@ -516,7 +516,7 @@ export default function Home() {
                           {message.sources && message.sources.length > 0 && (
                             <div className="rounded-lg bg-surface-elevated border border-border p-3">
                               <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">
-                                Grounded in:
+                                Sources:
                               </p>
                               <div className="flex flex-wrap gap-2">
                                 {message.sources.map((source: any, i: number) => (

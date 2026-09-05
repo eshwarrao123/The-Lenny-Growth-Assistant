@@ -79,3 +79,24 @@ class OllamaProvider(BaseLLMProvider):
                 return has_model
         except Exception:
             return False
+
+    async def detailed_health_check(self) -> Dict[str, Any]:
+        """Fast tag-based health inspection checking model availability without running inference."""
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                if response.status_code != 200:
+                    return {"status": "unavailable", "reachable": False}
+                models = response.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
+                has_chat = any(name.startswith(self.model) for name in model_names)
+                has_embed = any(name.startswith(self.embed_model) for name in model_names)
+                if has_chat and has_embed:
+                    return {"status": "ok", "reachable": True, "chat_model": True, "embed_model": True}
+                elif has_chat or has_embed:
+                    return {"status": "degraded", "reachable": True, "chat_model": has_chat, "embed_model": has_embed}
+                else:
+                    return {"status": "degraded", "reachable": True, "chat_model": False, "embed_model": False}
+        except Exception:
+            return {"status": "unavailable", "reachable": False}
+

@@ -1,336 +1,471 @@
 # The Lenny Growth Assistant
 
-A full-stack AI application that uses Lenny's Podcast transcripts as a grounded knowledge base to provide expert product/growth advice through conversational chat with artifact generation capabilities.
+A production-ready, full-stack AI application that leverages Lenny's Podcast transcripts as a grounded knowledge base to provide expert product and growth advice through conversational chat, specialized skill routing (Ship 30 for 30 essays), and an interactive side-by-side artifact generation and viewing system.
 
-## Tech Stack
+---
 
-- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS
-- **Backend**: FastAPI, Python 3.11+, SQLAlchemy async, Pydantic v2
-- **Database**: PostgreSQL 16 + pgvector
-- **AI**: Ollama (local), OpenAI/Anthropic (cloud optional)
-- **Infrastructure**: Docker Compose
-- **Testing**: pytest, Playwright
+## Table of Contents
 
-## Quick Start
+1. [What the Project Does](#1-what-the-project-does)
+2. [Architecture Overview](#2-architecture-overview)
+3. [Prerequisites](#3-prerequisites)
+4. [Environment Variable Configuration](#4-environment-variable-configuration)
+5. [Ollama Setup (Local LLM & Embeddings)](#5-ollama-setup-local-llm--embeddings)
+6. [Cloud Provider Setup (Optional OpenAI & Anthropic)](#6-cloud-provider-setup-optional-openai--anthropic)
+7. [Database Setup (PostgreSQL 16 + pgvector)](#7-database-setup-postgresql-16--pgvector)
+8. [Database Migrations (Alembic)](#8-database-migrations-alembic)
+9. [Downloading & Syncing Transcripts](#9-downloading--syncing-transcripts)
+10. [Knowledge Base Ingestion Pipeline](#10-knowledge-base-ingestion-pipeline)
+11. [Running the Backend Locally](#11-running-the-backend-locally)
+12. [Running the Frontend Locally](#12-running-the-frontend-locally)
+13. [Running Full Stack via Docker Compose](#13-running-full-stack-via-docker-compose)
+14. [Health Check Verification](#14-health-check-verification)
+15. [Running Backend Tests (pytest)](#15-running-backend-tests-pytest)
+16. [Running Frontend & E2E Tests (Playwright)](#16-running-frontend--e2e-tests-playwright)
+17. [Troubleshooting & Operational Runbook](#17-troubleshooting--operational-runbook)
+18. [Security Architecture & Sandboxing](#18-security-architecture--sandboxing)
+19. [Artifact System Behavior](#19-artifact-system-behavior)
+20. [Known Limitations & Trade-offs](#20-known-limitations--trade-offs)
+21. [Project Structure](#21-project-structure)
 
-### Prerequisites
-- Docker & Docker Compose
-- Node.js 20+
-- Python 3.11+
-- Ollama (running locally with `qwen2.5:7b` model)
+---
 
-### Development Setup
+## 1. What the Project Does
+
+The **Lenny Growth Assistant** transforms 303 podcast episodes and ~14,000 transcript chunks from *Lenny's Podcast* into an interactive, high-trust intelligence assistant:
+
+- **Grounded Conversational Q&A**: Answers product, growth, and startup questions strictly using transcript evidence retrieved via cosine similarity search over 768-dimensional pgvector embeddings. Every answer includes verifiable speaker and timestamp citations.
+- **Dedicated Skill Routing (Ship 30 for 30)**: Automatically transforms transcript insights into structured, atomic essays (~1,250 words) adhering to Dickie Bush and Nicolas Cole's Ship 30 for 30 writing methodology (1/3/1 visual rhythm, rapid Rate of Revelation, and Wheels & Spokes formatting).
+- **Interactive Split-Pane Artifact Viewer**: Generates standalone Markdown frameworks/checklists and live HTML/CSS/JS interactive calculators and dashboards. Artifacts render in an isolated, side-by-side pane on desktop and mobile drawer, supporting version history, copy, download, and raw/preview toggling.
+- **Guaranteed Out-of-Domain Refusal**: Detects queries that lack sufficient transcript grounding ($\text{similarity} < 0.65$) and cleanly refuses to hallucinate facts.
+
+---
+
+## 2. Architecture Overview
+
+For full technical specifications, see [docs/architecture.md](docs/architecture.md) and [docs/design.md](docs/design.md).
+
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│                             NEXT.JS 14 FRONTEND                          │
+│  (Port 3000: App Router, React 18, Tailwind CSS, DOMPurify, SplitPane)   │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │ HTTP / SSE (/api/chat)
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                             FASTAPI BACKEND                              │
+│         (Port 8000: Python 3.11+, SQLAlchemy Async, Pydantic v2)         │
+│                                                                          │
+│  ┌─────────────────┐   ┌──────────────────────┐   ┌───────────────────┐  │
+│  │  Skill Router   │──▶│     RAG Engine       │──▶│  Provider Factory │  │
+│  │ (QA/Ship30/Art) │   │ (pgvector cosine sim)│   │ (Ollama/OpenAI)   │  │
+│  └─────────────────┘   └──────────────────────┘   └───────────────────┘  │
+└───────────────────┬───────────────────────────────────┬──────────────────┘
+                    │ SQLAlchemy Asyncpg                │ REST / Streaming
+                    ▼                                   ▼
+┌──────────────────────────────────────┐   ┌───────────────────────────────┐
+│     POSTGRESQL 16 + PGVECTOR         │   │         OLLAMA ENGINE         │
+│         (Port 5432)                  │   │   (Port 11434 / Local CPU)    │
+│  - episodes                          │   │  - nomic-embed-text (768d)    │
+│  - transcript_chunks (HNSW index)    │   │  - qwen2.5:7b (Chat & Skills) │
+│  - chat_sessions & messages          │   └───────────────────────────────┘
+│  - artifacts (versioned history)     │
+└──────────────────────────────────────┘
+```
+
+---
+
+## 3. Prerequisites
+
+Before installing, ensure the host machine has:
+
+- **Operating System**: Linux, macOS, or Windows 10/11 (WSL2 or PowerShell)
+- **Docker & Docker Compose**: v24.0+ (Docker Desktop or Docker Engine)
+- **Node.js**: v20.x or later with `npm`
+- **Python**: v3.11 or later
+- **Ollama**: Installed and running locally (default: `http://localhost:11434`)
+- **System RAM**: 16 GB+ recommended for running Ollama `qwen2.5:7b` (4.7 GB model)
+
+---
+
+## 4. Environment Variable Configuration
+
+Copy the example template to create your `.env` file:
 
 ```bash
-# Clone and enter project
-cd lenny-growth-assistant
-
-# Copy environment template
 cp .env.example .env
+```
 
-# Start infrastructure (PostgreSQL + pgvector)
+> [!IMPORTANT]
+> The `.env` file is strictly ignored by `.gitignore`. Never commit actual API keys or credentials.
+
+### Key Variables in `.env`
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `development` | Runtime environment (`development`, `test`, `production`) |
+| `POSTGRES_HOST` | `localhost` | Database host (use `postgres` in Docker Compose) |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port |
+| `POSTGRES_USER` | `postgres` | Database user |
+| `POSTGRES_PASSWORD` | `postgres` | Database password |
+| `POSTGRES_DB` | `lenny_assistant` | Database name |
+| `EMBEDDING_DIMENSION` | `768` | **STRICT**: 768 for `nomic-embed-text` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint (`http://host.docker.internal:11434` in Docker) |
+| `OLLAMA_MODEL` | `qwen2.5:7b` | Primary chat and artifact generation model |
+| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model (must generate 768d vectors) |
+| `OPENAI_API_KEY` | *(Optional)* | Key for OpenAI fallback (`gpt-4o`) |
+| `ANTHROPIC_API_KEY` | *(Optional)* | Key for Anthropic fallback (`claude-3-5-sonnet`) |
+| `CORS_ORIGINS` | `http://localhost:3000` | Allowed origins for browser clients |
+
+---
+
+## 5. Ollama Setup (Local LLM & Embeddings)
+
+1. Start the Ollama daemon:
+   ```bash
+   ollama serve
+   ```
+2. Pull the required models:
+   ```bash
+   # Embedding model (768 dimensions)
+   ollama pull nomic-embed-text
+
+   # Primary generation model
+   ollama pull qwen2.5:7b
+   ```
+3. Verify models are available:
+   ```bash
+   curl http://localhost:11434/api/tags
+   ```
+
+> [!NOTE]
+> On CPU-only environments, loading `qwen2.5:7b` into system memory can take 20–40 seconds on the first inference request. Backend timeouts are configured to 300s to support local CPU execution safely.
+
+---
+
+## 6. Cloud Provider Setup (Optional OpenAI & Anthropic)
+
+To test against commercial cloud models:
+
+1. Add your API keys to `.env`:
+   ```bash
+   OPENAI_API_KEY=sk-...
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+2. Switch providers on any request by setting the `"provider"` field:
+   ```bash
+   curl -N -X POST http://localhost:8000/api/chat \
+     -H "Content-Type: application/json" \
+     -d '{"message": "What is PMF?", "provider": "openai"}'
+   ```
+3. Or select the provider directly from the UI header dropdown.
+
+---
+
+## 7. Database Setup (PostgreSQL 16 + pgvector)
+
+Start the official PostgreSQL container with the `pgvector` extension:
+
+```bash
 docker compose up -d postgres
+```
 
-# Backend setup
+Verify the database container is healthy:
+```bash
+docker compose ps postgres
+```
+
+The database initializes with the `vector` extension and standard tables.
+
+---
+
+## 8. Database Migrations (Alembic)
+
+Apply all database schema migrations to initialize tables and indices:
+
+```bash
 cd backend
-python -m venv .venv
+# Activate your virtual environment
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+
+# Apply migrations
 alembic upgrade head
 
-# Frontend setup
-cd ../frontend
-npm install
-npm run dev
-
-# Start backend (in separate terminal)
-cd ../backend
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+# Verify pgvector extension and 768d schema
+python scripts/verify_pgvector.py
 ```
 
-### Docker Compose (Full Stack)
+Expected output:
+```text
+[SUCCESS] pgvector extension exists: version 0.6.0
+[SUCCESS] Expected tables present: ['alembic_version', 'artifacts', 'chat_sessions', 'episodes', 'messages', 'transcript_chunks']
+[SUCCESS] Dimension verified: 768
+[SUCCESS] HNSW Index exists: ix_chunks_embedding
+```
+
+---
+
+## 9. Downloading & Syncing Transcripts
+
+The assistant uses real podcast transcripts from Lenny Rachitsky's show. Download/sync all 303 episodes:
 
 ```bash
-docker compose up --build
+cd backend
+python scripts/download_transcripts.py
 ```
 
-Services:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
-- PostgreSQL: localhost:5432
+This verifies and writes episode markdown files to `backend/data/transcripts/episodes/`.
 
-## Project Structure
+---
 
+## 10. Knowledge Base Ingestion Pipeline
+
+Run the idempotent batch ingestion pipeline to parse frontmatter, split paragraphs into semantic chunks, generate 768d embeddings, and populate PostgreSQL:
+
+```bash
+cd backend
+python scripts/ingest.py --concurrency 8
 ```
+
+Verify data integrity:
+```bash
+# Verify record counts and foreign key integrity
+python scripts/verify_stored_data.py
+
+# Run a live similarity retrieval test
+python scripts/test_vector_retrieval.py
+```
+
+Expected verification stats:
+- **Episodes**: 303
+- **Transcript Chunks**: ~13,875
+- **Embeddings Dimension**: 768 (100% verified)
+- **Duplicate Episode IDs**: 0
+- **Orphan Chunks**: 0
+
+---
+
+## 11. Running the Backend Locally
+
+```bash
+cd backend
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# Run FastAPI development server with reload
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+- API Base: `http://localhost:8000`
+- Interactive Swagger Docs: `http://localhost:8000/docs`
+- Health Endpoint: `http://localhost:8000/api/health`
+
+---
+
+## 12. Running the Frontend Locally
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+- Web Interface: `http://localhost:3000`
+- Configured via `NEXT_PUBLIC_API_URL=http://localhost:8000`
+
+---
+
+## 13. Running Full Stack via Docker Compose
+
+To launch the complete containerized stack:
+
+```bash
+docker compose up --build -d
+```
+
+Compose manages:
+1. `postgres`: PostgreSQL 16 + pgvector on port 5432 with healthchecks.
+2. `backend`: FastAPI API on port 8000 with `host.docker.internal` host gateway to connect to your host's Ollama instance.
+3. `frontend`: Next.js production build on port 3000, dependent on `backend` being healthy.
+
+Stop the stack:
+```bash
+docker compose down
+```
+
+---
+
+## 14. Health Check Verification
+
+The `/api/health` endpoint provides comprehensive component-level readiness:
+
+```bash
+curl -i http://localhost:8000/api/health
+```
+
+### Response Semantics:
+- **`200 OK (healthy)`**: PostgreSQL is connected via fast `SELECT 1` and Ollama is reachable with required models loaded.
+- **`200 OK (degraded)`**: Core database is online, but an optional cloud provider (e.g. OpenAI) has missing keys.
+- **`503 Service Unavailable (unavailable)`**: Critical dependency (PostgreSQL database) is unreachable.
+
+### Sample Response:
+```json
+{
+  "status": "healthy",
+  "application": "ok",
+  "db": "ok",
+  "ollama": "ok",
+  "openai": "missing_key",
+  "components": {
+    "database": { "status": "ok" },
+    "ollama": {
+      "status": "ok",
+      "model": "qwen2.5:7b",
+      "embedding_model": "nomic-embed-text",
+      "reachable": true,
+      "chat_model": true,
+      "embed_model": true
+    },
+    "openai": { "status": "missing_key" }
+  },
+  "environment": "development"
+}
+```
+
+---
+
+## 15. Running Backend Tests (pytest)
+
+Run the full backend test suite covering unit tests, RAG retrieval, skill routing, provider abstractions, and session lifecycles:
+
+```bash
+cd backend
+pytest -v
+```
+
+Status: **36 passed in ~1.1s**.
+
+---
+
+## 16. Running Frontend & E2E Tests (Playwright)
+
+Run the Playwright test suite against the running frontend and backend stack:
+
+```bash
+cd frontend
+
+# Run all E2E specs
+npx playwright test
+
+# Targeted test runs:
+npx playwright test tests/e2e/core.spec.ts           # Core chat, streaming, sessions, versioning (13 tests)
+npx playwright test tests/e2e/security.spec.ts       # Iframe sandbox, DOMPurify, XSS defense (3 tests)
+npx playwright test tests/e2e/accessibility.spec.ts  # a11y landmarks, iframe title, focus trap (6 tests)
+npx playwright test tests/e2e/responsive.spec.ts     # Desktop split pane, tablet, mobile drawer (3 tests)
+npx playwright test tests/e2e/copy-download.spec.ts  # Copy and file download verification (4 tests)
+npx playwright test tests/e2e/real-ollama.spec.ts    # Real end-to-end Ollama generation (2 tests)
+```
+
+Status: **31 passed**.
+
+---
+
+## 17. Troubleshooting & Operational Runbook
+
+For complete operational diagnosis and incident recovery, consult **[docs/runbook.md](docs/runbook.md)**.
+
+### Common Issues:
+
+1. **Database Connection Refused**:
+   - Verify container is running: `docker compose ps postgres`.
+   - Ensure `POSTGRES_HOST=localhost` in `.env` for local runs, or `POSTGRES_HOST=postgres` inside Docker. Avoid ephemeral WSL2 internal IP addresses.
+2. **Ollama Read Timeout on CPU**:
+   - Initial generation on CPU requires loading model weights into RAM (30–45s). Ensure `httpx` timeouts are set to 300s (configured by default in `OllamaProvider`).
+3. **Embedding Dimension Mismatch**:
+   - Error `expected 768 dimensions, got ...` indicates an incorrect model was used. Pull `nomic-embed-text` explicitly.
+4. **Port In Use (8000 / 3000 / 5432)**:
+   - Identify blocking process: `netstat -ano | findstr :8000` (Windows) or `lsof -i :8000` (Linux/macOS).
+
+---
+
+## 18. Security Architecture & Sandboxing
+
+1. **Sandboxed Iframe Isolation**:
+   - All HTML artifacts are rendered inside an `<iframe sandbox="allow-scripts">`.
+   - `allow-same-origin` is **strictly omitted**, giving the iframe a null origin. Untrusted code cannot access parent cookies, `localStorage`, `sessionStorage`, or the host DOM.
+2. **Markdown DOMPurify Sanitization**:
+   - Markdown documents are rendered via `react-markdown` and sanitized with strict DOMPurify rules forbidding inline `<script>` tags, `javascript:` URIs, and event handlers (`onload`, `onerror`).
+3. **Payload Safeguards**:
+   - Artifact bodies and chat messages are capped at 5MB at the API and database levels to prevent memory exhaustion attacks.
+4. **Credential Redaction**:
+   - Structlog filters automatically redact sensitive keys (`authorization`, `api_key`, `password`, `token`, `cookie`) before emitting JSON logs.
+
+---
+
+## 19. Artifact System Behavior
+
+- **Side-by-Side Coexistence**: On screens $\ge 1024\text{px}$, the chat pane occupies `flex: 1 1 0%` while the artifact viewer expands smoothly with a 260px minimum width up to 70% width. Neither pane overlaps or displaces messages.
+- **Mobile Drawer**: On mobile viewports ($< 768\text{px}$), the sidebar navigation slides off-canvas (`-translate-x-full`), and artifacts present in an accessible full-screen modal.
+- **Live Streaming**: Emits `artifact_start`, `artifact_chunk`, and `artifact_done` SSE events, rendering content incrementally as the LLM generates tokens.
+- **Version Switcher**: Modifying an artifact produces a new version (`v1`, `v2`, ...). Users can click version buttons in the header toolbar to inspect or restore prior iterations.
+- **Raw / Preview Mode**: Toggle between formatted preview and monospace markdown source code.
+- **Export Controls**: One-click copy to clipboard and direct file download (`.md` or `.html`).
+
+---
+
+## 20. Known Limitations & Trade-offs
+
+1. **Local CPU Generation Latency**: Running Ollama on local CPU without dedicated GPU acceleration generates tokens at ~5–12 tokens/sec. Complex HTML artifacts may take 60–90 seconds. Cloud providers (OpenAI/Anthropic) offer sub-second TTFT when API keys are supplied.
+2. **Single-Node In-Memory SSE State**: SSE streaming chunks are streamed directly from the backend worker. In a multi-replica cluster, sticky sessions or a shared pub/sub bus (e.g., Redis) would be required.
+3. **Theme Support**: The interface is intentionally locked to a dark mode aesthetic tailored to the Lenny brand palette. Light mode toggle is not implemented.
+4. **External CDNs in Sandboxed Iframes**: Sandboxed null-origin iframes require network connectivity to load external CSS/JS frameworks. Artifacts generated with vanilla CSS and inline JavaScript provide the highest reliability in offline environments.
+
+---
+
+## 21. Project Structure
+
+```text
 lenny-growth-assistant/
 ├── backend/
 │   ├── app/
-│   │   ├── api/           # FastAPI routes
-│   │   ├── core/          # Config, security, database
-│   │   ├── models/        # SQLAlchemy models
-│   │   ├── providers/     # LLM provider abstractions
-│   │   ├── services/      # Business logic (chat, RAG, skills)
-│   │   └── main.py        # App entry point
-│   ├── alembic/           # Database migrations
-│   ├── tests/             # pytest tests
-│   ├── pyproject.toml
-│   └── Dockerfile
+│   │   ├── api/                 # FastAPI routers (chat, sessions, artifacts, health)
+│   │   ├── core/                # Configuration, logging, database engine
+│   │   ├── models/              # SQLAlchemy models (Episode, Chunk, Session, Message, Artifact)
+│   │   ├── providers/           # LLM provider abstractions (Ollama, OpenAI, Anthropic, Factory)
+│   │   ├── schemas/             # Pydantic v2 schemas and validation
+│   │   ├── services/            # Chat service, RAG engine, skill routing
+│   │   │   └── skills/          # Grounded QA, Ship 30 essay, Artifact generator
+│   │   └── main.py              # Application lifecycle and middleware
+│   ├── alembic/                 # Database schema migrations
+│   ├── scripts/                 # Download, ingestion, verification, and test scripts
+│   ├── tests/                   # Pytest suite (36 tests)
+│   ├── Dockerfile
+│   └── pyproject.toml
 ├── frontend/
 │   ├── src/
-│   │   ├── app/           # Next.js App Router pages
-│   │   ├── components/    # React components
-│   │   ├── lib/           # Utilities, API client
-│   │   └── styles/        # Global styles
-│   ├── public/
-│   ├── package.json
-│   └── Dockerfile
+│   │   ├── app/                 # Next.js App Router pages and layout
+│   │   ├── components/          # React components (ArtifactViewer, SandboxedIframe, MarkdownArtifact)
+│   │   ├── lib/                 # Utilities and API client
+│   │   └── styles/              # Global CSS, design tokens, and animations
+│   ├── tests/
+│   │   └── e2e/                 # Playwright test specs (31 tests)
+│   ├── Dockerfile
+│   └── package.json
 ├── docs/
-│   ├── PRD.md
-│   ├── architecture.md
-│   └── design.md
-├── docker-compose.yml
-├── .env.example
-└── README.md
+│   ├── PRD.md                   # Product requirements document
+│   ├── architecture.md          # System architecture and data flows
+│   ├── design.md                # UI design tokens, component inventory, and interaction patterns
+│   └── runbook.md               # Operational runbook and troubleshooting guide
+├── agent_transcripts/
+│   ├── README.md                # Development trajectory index
+│   └── PHASE_1_TO_8_DEVELOPMENT_LOG.md  # Detailed phase log with decisions and corrections
+├── docker-compose.yml           # Multi-service production orchestration
+├── .env.example                 # Comprehensive environment variable template
+├── .gitignore                   # Rigorous secret, artifact, and build exclusion rules
+└── README.md                    # Project documentation and operational handoff
 ```
 
-## Key Features
-
-- **Streaming Chat**: Real-time token streaming via SSE/WebSocket
-- **RAG Pipeline**: Semantic search over podcast transcripts with citations
-- **Ship 30 for 30 Skill**: Transforms transcript insights into structured, grounded atomic essays (~1,250 words) adhering to Ship 30 for 30 principles
-- **Artifact System**: Dedicated side-by-side interactive split-pane viewer for Markdown documents and sandboxed HTML/JS applications with version history, copy/download controls, and keyboard navigation
-- **Session Persistence**: Chat history, source citations, and artifact version histories survive browser restarts
-- **Multi-Provider LLM**: Ollama (local default) + optional cloud providers
-
-## Usage Examples
-
-### 1. Grounded Q&A (Default Skill)
-Ask questions across Lenny's 303 podcast episodes:
-```bash
-curl -N -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "your-session-uuid",
-    "message": "What does Elena Verna say about product-led sales?",
-    "provider": "ollama"
-  }'
-```
-* **Routing**: Automatically routes to `grounded_qa`.
-* **Behavior**: Retrieves transcript chunks with similarity $\ge 0.65$, streams real-time SSE tokens, and provides verifiable timestamp citations (e.g. `[Source: Elena Verna — The ultimate guide to product-led sales — 01:16:33]`).
-
-### 2. Ship 30 for 30 Essay (Dedicated Capability)
-Request a published-quality atomic essay directly or as a conversational follow-up:
-```bash
-curl -N -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "your-session-uuid",
-    "message": "Turn that into a Ship 30 for 30 essay.",
-    "provider": "ollama"
-  }'
-```
-* **Routing**: Deterministically routes to `ship30` (also supports `/ship30 <topic>` and explicit `"skill": "ship30"`).
-* **Context Resolution**: Resolves anaphoric references ("that", "this") from conversation history to target Elena Verna's product-led sales principles.
-* **Style**: Employs 1/3/1 visual rhythm, rapid Rate of Revelation, Wheels & Spokes subheadings, and actionable takeaways, grounded strictly in Lenny transcript evidence.
-
-### 3. Out-of-Domain Refusal
-```bash
-curl -N -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "your-session-uuid",
-    "message": "Write a Ship 30 essay about quantum computing qubits.",
-    "provider": "ollama"
-  }'
-```
-* **Behavior**: Detects insufficient transcript evidence in the vector index and issues a safe refusal rather than hallucinating facts.
-
-### 4. Interactive Artifact Generation (Phase 6 Capability)
-Request a checklist, standalone tool, or visual layout:
-```bash
-curl -N -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "your-session-uuid",
-    "message": "Create a short markdown checklist for testing product-market fit.",
-    "provider": "ollama"
-  }'
-```
-* **Routing**: Deterministically routes to `artifact` skill when requests contain artifact triggers (`create a markdown checklist`, `create an html calculator`, `build a component`, etc.) or `/artifact <prompt>`.
-* **SSE Event Stream**: Emits `start` (with skill `artifact`), `status`, `artifact_start` (with `id`, `title`, `type`), `artifact_chunk` (streaming content directly into the viewer), `artifact_done` (with `artifact_id`), and `done`.
-* **Side-by-Side Coexistence**: The artifact viewer pane opens seamlessly alongside the chat pane on desktop (`flex: 1 1 0%` chat, `min-width: 260px` to `70%` artifact) without overlapping or displacing messages.
-* **Format Support**:
-  - **Markdown**: Rendered natively via `react-markdown` with `remark-gfm` and syntax-highlighted code blocks, sanitized via strict DOMPurify rules forbidding inline scripts/handlers.
-  - **HTML**: Rendered inside an isolated `<iframe sandbox="allow-scripts">` (strictly omitting `allow-same-origin`), guaranteeing zero access to `parent.document`, `parent.localStorage`, `parent.cookie`, or parent window objects.
-* **Version History**: Subsequent edits to an artifact increment the version integer (`v1`, `v2`, ...), accessible via accessible tab switchers with REST endpoints `/api/artifacts/versions/{session_id}/{title}` and `/api/artifacts/{id}`.
-* **Export Controls**: One-click **Copy** (exact source) and **Download** (`.md` or `.html` with appropriate MIME types).
-
-## Artifact System & Security Architecture
-
-### 1. Sandboxing & Isolation
-- **Iframe Sandbox**: All HTML artifacts run in an `<iframe>` configured with `sandbox="allow-scripts"`.
-- **Zero Same-Origin**: The sandbox explicitly omits `allow-same-origin`. In modern browsers, this forces the iframe content into a unique, null-origin execution context that cannot access the hosting window's cookies, session storage, local storage, or DOM.
-- **External Resource Policy**: The sandboxed iframe executes inline scripts and CSS safely. Outbound network requests and top-level navigation (`allow-top-navigation`) are restricted to maintain safety against exfiltration and clickjacking.
-
-### 2. DOMPurify & Markdown Sanitization
-- Markdown content is rendered into React elements. Any raw HTML embedded within Markdown undergoes strict client-side DOMPurify sanitization. Script tags (`<script>`), inline event handlers (`onerror`, `onclick`), and `javascript:` URIs are stripped, preventing stored XSS attacks.
-
-### 3. Payload Safeguards & 5MB Limit
-- Artifact contents are bounded by a 5MB payload limit at the API and database layer to prevent memory exhaustion and browser denial-of-service.
-- Local CPU streaming buffers chunks safely with automatic debounce and cache synchronization in the frontend.
-
-### 4. Accessibility (a11y)
-- The artifact viewer is registered as an accessible region (`aria-label="Artifact viewer"`).
-- The iframe includes descriptive `title` attributes (`title="Artifact Preview"`).
-- Keyboard operable: `Escape` key closes the viewer and returns focus to the chat textarea; all controls have visible `focus-visible` focus rings and assistive technology labels.
-
-## Environment Variables
-
-See `.env.example` for all configuration options.
-
-Key variables:
-- `DATABASE_URL` - PostgreSQL connection string
-- `OLLAMA_BASE_URL` - Ollama API endpoint (default: http://host.docker.internal:11434)
-- `OLLAMA_MODEL` - Chat model (default: qwen2.5:7b)
-- `OPENAI_API_KEY` - Optional cloud provider
-- `ANTHROPIC_API_KEY` - Optional cloud provider
-
-## Knowledge Base Ingestion & Verification
-
-The Lenny Growth Assistant retrieves facts directly from Lenny's Podcast transcripts ingested into PostgreSQL + pgvector.
-
-### Step-by-Step Production Setup
-
-1. **Start Docker Infrastructure (PostgreSQL + pgvector)**:
-   ```powershell
-   # Run PostgreSQL 16 container with pgvector extension
-   docker compose up -d postgres
-   docker version
-   docker compose version
-   ```
-
-2. **Verify & Start Ollama Embedding Engine**:
-   Ensure Ollama is running and pull the official `nomic-embed-text` 768-dimension embedding model:
-   ```powershell
-   ollama pull nomic-embed-text
-   # Verify reachable at http://localhost:11434/api/tags
-   ```
-
-3. **Synchronize Real Podcast Transcripts**:
-   Download/sync the latest transcript repository from ChatPRD:
-   ```powershell
-   cd backend
-   $env:PYTHONPATH="."
-   python scripts/download_transcripts.py
-   ```
-   *Discovers and validates all 303 episode directories under `backend/data/transcripts/episodes/`.*
-
-4. **Apply Alembic Migrations**:
-   ```powershell
-   alembic upgrade head
-   python scripts/verify_pgvector.py
-   ```
-   *Validates `vector` extension, 768d embedding columns, and HNSW cosine distance index (`<=>`).*
-
-5. **Run High-Speed Pipeline Ingestion**:
-   ```powershell
-   python scripts/ingest.py --concurrency 8
-   ```
-   *Parses frontmatter metadata, chunks paragraphs by token limits while maintaining speaker/timestamp context, generates 768d embeddings in batches via Ollama `/api/embed`, and performs idempotent database writes.*
-
-6. **Verify Data Integrity & Retrieval**:
-   ```powershell
-   # Comprehensive database verification
-   python scripts/verify_stored_data.py
-
-   # Real similarity vector retrieval test
-   python scripts/test_vector_retrieval.py
-   ```
-
-### Verified Pipeline Outputs
-
-- **pgvector Check (`verify_pgvector.py`)**:
-  ```text
-  [SUCCESS] pgvector extension exists: version 0.6.0
-  [SUCCESS] Expected tables present: ['alembic_version', 'artifacts', 'chat_sessions', 'episodes', 'messages', 'transcript_chunks']
-  [SUCCESS] Dimension verified: 768
-  [SUCCESS] HNSW Index exists: ix_chunks_embedding
-  [SUCCESS] Cosine distance query executed cleanly with <=> operator
-  ```
-
-- **Stored Data Statistics (`verify_stored_data.py`)**:
-  ```text
-  Episode Count: 303
-  Chunk Count: ~13,875
-  Embedding Count: ~13,875
-  Embedding Dimension: 768 (100% verified)
-  Duplicate Episode IDs: 0
-  Missing Citation Metadata: 0
-  Orphan Chunks (FK Violation): 0
-  ```
-
-- **Vector Similarity Search (`test_vector_retrieval.py`)**:
-  Query: *"How do you measure product-market fit?"*
-  Returns top-K matching chunks with episode title, guest name, speaker label, timestamp citation, chunk UUID, and cosine similarity score.
-
-### Troubleshooting
-
-- **PostgreSQL Connection Refused**:
-  Ensure `POSTGRES_HOST=localhost` in `.env` matches your container binding on port 5432. Avoid using ephemeral WSL2 virtual interface IPs as they change across host system reboots.
-- **Ollama Dimension Mismatch**:
-  Ensure `OLLAMA_EMBEDDING_MODEL=nomic-embed-text` is configured in `.env`. Do NOT substitute with 384d or 1536d models without updating migration schema.
-- **Idempotency & Rebuild**:
-  Running `python scripts/ingest.py` without `--refresh` skips existing episodes without duplicating records. Use `python scripts/ingest.py --refresh` to delete and rebuild specific episodes cleanly.
-
-## Testing & Verification
-
-The test suite provides comprehensive coverage across unit, integration, RAG, skill routing, security, and real LLM end-to-end browser workflows:
-
-```bash
-# Backend unit, RAG, provider, and skill tests (36/36 passing)
-cd backend
-pytest -v
-
-# Frontend unit/component tests
-cd frontend
-npm test
-
-# Complete Playwright E2E browser test suite (31/31 passing)
-cd frontend
-npx playwright test
-
-# Targeted test executions:
-npx playwright test tests/e2e/accessibility.spec.ts   # a11y, iframe title, keyboard focus
-npx playwright test tests/e2e/responsive.spec.ts      # Desktop split-pane, tablet, mobile drawer
-npx playwright test tests/e2e/security.spec.ts        # Iframe sandbox isolation, DOMPurify, XSS defense
-npx playwright test tests/e2e/real-ollama.spec.ts     # Real Ollama Markdown & HTML streaming on CPU
-```
-
-### Verified Test Summary
-- **Backend**: `36 passed in ~1.1s`
-- **Frontend Playwright E2E**:
-  - `accessibility.spec.ts`: 6/6 passed (accessible names, iframe title, Escape/close keyboard flow, version switcher, focus rings, no keyboard trap)
-  - `copy-download.spec.ts`: 4/4 passed (copy markdown/html exact match, file downloads as `.md`/`.html`)
-  - `core.spec.ts`: 13/13 passed (session lifecycle, grounded QA with sources, markdown/html rendering, close/reopen, version switcher, raw/preview toggling, stream error handling, enter key sending)
-  - `responsive.spec.ts`: 3/3 passed (1440x900 desktop split-pane, 768x1024 tablet split-pane with collapsible sidebar, 375x667 mobile drawer off-canvas and slide-in)
-  - `security.spec.ts`: 3/3 passed (`allow-scripts` sandbox without `allow-same-origin`, isolated parent cookies/storage/DOM, XSS script injection blocked)
-  - `real-ollama.spec.ts`: 2/2 passed (real live Ollama generation for both Markdown and HTML artifacts)
-  - **Total**: 31 passed
-
-## Known Limitations
-
-1. **Local CPU Generation Speed**: Ollama running locally without dedicated GPU passthrough generates ~5–12 tokens/second on CPU. While Markdown artifacts complete in ~35 seconds, complex HTML artifacts may take 1.5–2 minutes. Client-side timeouts have been calibrated to 220s for CPU runs.
-2. **External CDNs in Sandboxed Iframes**: Sandboxed iframes without `allow-same-origin` cannot access parent cookies or local storage. External CDN scripts (e.g., Tailwind CDN or unpkg scripts) may fail if the environment is offline; self-contained vanilla CSS and JS are recommended for generated artifacts.
-3. **Single-Node In-Memory Cache**: Active in-progress streaming artifacts are buffered in client memory before final database synchronization via `/api/artifacts/{id}`. Session persistence retains all completed versions.
-4. **Single Theme (Dark Mode Only)**: The application currently adheres strictly to the dark mode design language; dynamic light theme switching is not enabled.
-
-## Documentation
-
-- [PRD](docs/PRD.md) - Product requirements
-- [Architecture](docs/architecture.md) - Technical architecture
-- [Design](docs/design.md) - Visual and interaction design
+---
 
 ## License
 
-MIT
+MIT License. See LICENSE for details.

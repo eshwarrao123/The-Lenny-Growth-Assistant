@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from 'react'
 import { X, Copy, Download, Code, Eye } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { SandboxedIframe } from './SandboxedIframe'
 import { MarkdownArtifact } from './MarkdownArtifact'
 

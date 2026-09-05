@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -17,12 +15,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      - lenny-network
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: lenny-backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - APP_ENV=development
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/lenny
@@ -31,11 +34,13 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=lenny
+      - PGVECTOR_DIMENSIONS=768
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=qwen2.5:7b
       - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
       - SECRET_KEY=dev-secret-change-in-production
       - CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+      - LOG_LEVEL=INFO
     ports:
       - "8000:8000"
     volumes:
@@ -43,7 +48,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
+    networks:
+      - lenny-network
 
   frontend:
     build:
@@ -60,8 +73,17 @@ services:
       - /app/node_modules
       - /app/.next
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - lenny-network
 
 volumes:
   postgres_data:
+    name: lenny-postgres-data
+
+networks:
+  lenny-network:
+    name: lenny-network
+    driver: bridge
