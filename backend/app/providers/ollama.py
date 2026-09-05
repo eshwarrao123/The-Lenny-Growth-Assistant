@@ -28,8 +28,9 @@ class OllamaProvider(BaseLLMProvider):
         yield {"event": "status", "data": {"stage": "generating"}}
 
         try:
-            async with httpx.AsyncClient() as client:
-                async with client.stream("POST", url, json=payload, timeout=60.0) as response:
+            timeout_config = httpx.Timeout(300.0, connect=30.0)
+            async with httpx.AsyncClient(timeout=timeout_config) as client:
+                async with client.stream("POST", url, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if not line:
@@ -47,11 +48,11 @@ class OllamaProvider(BaseLLMProvider):
                             logger.warning(f"Failed to decode Ollama stream line: {line}")
                             
         except httpx.RequestError as e:
-            logger.error(f"Ollama request error: {e}")
-            yield {"event": "error", "data": {"code": "provider_unavailable", "message": f"Ollama is unreachable: {str(e)}"}}
+            logger.error(f"Ollama request error ({type(e).__name__}): {e}")
+            yield {"event": "error", "data": {"code": "provider_unavailable", "message": f"Ollama is unreachable or timed out: {str(e)}"}}
             yield {"event": "done", "data": {}}
         except httpx.HTTPStatusError as e:
-            logger.error(f"Ollama HTTP error: {e}")
+            logger.error(f"Ollama HTTP error ({e.response.status_code}): {e}")
             yield {"event": "error", "data": {"code": "provider_error", "message": f"Ollama returned HTTP error: {e.response.status_code}"}}
             yield {"event": "done", "data": {}}
         except Exception as e:

@@ -211,7 +211,70 @@ Server-Sent Events (SSE) stream highly structured JSON payloads to the frontend.
 * **Integration**: Testing pgvector HNSW insert/retrieve flows.
 * **E2E Browser**: Playwright tests to validate Artifact Viewer sandboxing (XSS attempts) and provider toggling.
 
-## 11. Decisions Intentionally Deferred (Phase 4+)
+## 11. Skill Routing & Capability Architecture (Phase 5)
+
+Phase 5 transitions the Lenny Growth Assistant from a single-mode chat endpoint into an extensible capability-based system.
+
+### 11.1 Skill Abstraction (`BaseSkill`)
+All skills implement the abstract `BaseSkill` interface (`backend/app/services/skills/base.py`):
+```python
+class BaseSkill(ABC):
+    name: str
+    description: str
+
+    @abstractmethod
+    async def execute_stream(
+        self, context: SkillContext
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        pass
+```
+The execution context (`SkillContext`) encapsulates:
+- `session_id`: Active session UUID
+- `user_message`: Raw user prompt
+- `history`: Prior conversation turns from PostgreSQL (`List[Message]`)
+- `provider_name`: Configured LLM provider (`"ollama"`, `"openai"`)
+- `retriever`: Shared `TranscriptRetriever` instance
+- `resolved_query`: Cleaned or anaphorically-resolved subject query
+
+### 11.2 Deterministic Skill Routing (`SkillRouter`)
+The `SkillRouter` routes incoming chat queries without introducing extra LLM classification latency or non-determinism:
+1. **Explicit Skill Parameter**: If the client provides `skill="qa"` or `skill="ship30"`, that skill executes directly.
+2. **Slash Commands**: Supports `/ship30 <topic>` or `/qa <question>` shortcuts.
+3. **Deterministic Pattern Matching**: Matches explicit Ship 30 intent phrases (e.g., `"ship 30"`, `"ship30"`, `"ship 30 for 30 essay"`, `"turn this into an essay"`, `"1,250 word essay"`).
+4. **Anaphoric Reference Resolution**: When the user asks *"Turn that into a Ship 30 essay"* or *"Give me the Ship 30 version of that"*, the router resolves the subject topic from the preceding session turns (last assistant response or user question).
+5. **Default Fallback**: Normal questions default to `GroundedQASkill`.
+
+### 11.3 Grounded Q&A Skill (`GroundedQASkill`)
+* Preserves 100% of Phase 4 grounded QA behavior.
+* Retrieves top-K chunks ($K=5$, threshold $\ge 0.65$).
+* Fallback to conversational context when user asks follow-up questions.
+* Fast-path refusal if no relevant transcript chunks exist in the vector database.
+
+### 11.4 Ship 30 for 30 Writing Skill (`Ship30Skill`)
+Transforms Lenny transcript wisdom into published-quality atomic essays (~1,250 words) adhering strictly to official Ship 30 for 30 principles:
+- **Visual Rhythm (1/3/1 and 1/5/1 Structure)**: Alternates single-sentence hooks, short 2–3 sentence explanatory blocks, and punchy single-line takeaways. Eliminates walls of text.
+- **Fast Rate of Revelation**: High velocity of new insights per paragraph, cutting preamble and filler.
+- **Wheels & Spokes Architecture**: Clear modular subheadings (`##`) containing:
+  1. *Headline*: Strong, specific claim.
+  2. *Anchor / Evidence*: Real insights from Lenny guests.
+  3. *Actionable Takeaway*: Direct framework or tactical exercise.
+- **Content Differentiation ("The Tequila Test")**: Forces radical specificity to the featured guest (e.g., Elena Verna, Shreyas Doshi) so the essay cannot be confused with generic business writing.
+- **Strict Transcript Grounding**: Transcript chunks are injected inside `<transcript_context>` tags as raw reference data, not system instructions. The model is forbidden from inventing quotes or citing guests not present in the evidence.
+
+### 11.5 Output Validation
+The `validate_ship30_output` function performs lightweight structural validation:
+- **Word Count**: Targets ~1,250 words with an operational tolerance of 850–1,600 words for local 7B models.
+- **Markdown Integrity**: Ensures presence of structural headings (`#`, `##`).
+- **Citation Traceability**: Verifies format `[Source: Guest Name — Episode Title — HH:MM:SS]`.
+- **Injection / Leakage Defense**: Confirms internal system prompt tags (`<transcript_context>`, `SYSTEM INSTRUCTIONS`) are not leaked into the user-facing text.
+
+### 11.6 SSE Streaming & Persistence Integration
+- Reuses the existing Server-Sent Events contract (`event: start`, `sources`, `token`, `done`, `error`).
+- Emits the active skill identifier in the `start` event payload (`{"session_id": "...", "skill": "ship30"}`).
+- Persists both user requests and generated essays to the PostgreSQL `messages` table with complete JSONB `sources` citations.
+
+## 12. Decisions Intentionally Deferred (Phase 6+)
 - Hybrid search (BM25 + Dense) implementation.
-- Real-time cloud audio ingestion.
+- Interactive HTML Artifact sandbox rendering and version tab viewer (Phase 6).
+- Sandboxed iframe preview with copy/download controls (Phase 6).
 - Multi-user authentication (RBAC).

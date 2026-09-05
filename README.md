@@ -98,10 +98,53 @@ lenny-growth-assistant/
 
 - **Streaming Chat**: Real-time token streaming via SSE/WebSocket
 - **RAG Pipeline**: Semantic search over podcast transcripts with citations
-- **Ship 30 for 30 Skill**: Generates structured writing exercises
-- **Artifact System**: Interactive HTML/React/Markdown artifacts with isolated viewer
-- **Session Persistence**: Chat history survives browser restarts
-- **Multi-Provider LLM**: Ollama (local) + cloud providers
+- **Ship 30 for 30 Skill**: Transforms transcript insights into structured, grounded atomic essays (~1,250 words) adhering to Ship 30 for 30 principles
+- **Artifact System**: (Planned for Phase 6) Interactive HTML/React/Markdown artifacts with isolated viewer
+- **Session Persistence**: Chat history and source citations survive browser restarts
+- **Multi-Provider LLM**: Ollama (local default) + optional cloud providers
+
+## Usage Examples
+
+### 1. Grounded Q&A (Default Skill)
+Ask questions across Lenny's 303 podcast episodes:
+```bash
+curl -N -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "your-session-uuid",
+    "message": "What does Elena Verna say about product-led sales?",
+    "provider": "ollama"
+  }'
+```
+* **Routing**: Automatically routes to `grounded_qa`.
+* **Behavior**: Retrieves transcript chunks with similarity $\ge 0.65$, streams real-time SSE tokens, and provides verifiable timestamp citations (e.g. `[Source: Elena Verna — The ultimate guide to product-led sales — 01:16:33]`).
+
+### 2. Ship 30 for 30 Essay (Dedicated Capability)
+Request a published-quality atomic essay directly or as a conversational follow-up:
+```bash
+curl -N -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "your-session-uuid",
+    "message": "Turn that into a Ship 30 for 30 essay.",
+    "provider": "ollama"
+  }'
+```
+* **Routing**: Deterministically routes to `ship30` (also supports `/ship30 <topic>` and explicit `"skill": "ship30"`).
+* **Context Resolution**: Resolves anaphoric references ("that", "this") from conversation history to target Elena Verna's product-led sales principles.
+* **Style**: Employs 1/3/1 visual rhythm, rapid Rate of Revelation, Wheels & Spokes subheadings, and actionable takeaways, grounded strictly in Lenny transcript evidence.
+
+### 3. Out-of-Domain Refusal
+```bash
+curl -N -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "your-session-uuid",
+    "message": "Write a Ship 30 essay about quantum computing qubits.",
+    "provider": "ollama"
+  }'
+```
+* **Behavior**: Detects insufficient transcript evidence in the vector index and issues a safe refusal rather than hallucinating facts.
 
 ## Environment Variables
 

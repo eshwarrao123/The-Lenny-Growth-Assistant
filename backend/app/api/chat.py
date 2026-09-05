@@ -23,7 +23,8 @@ async def generate_chat(request: ChatRequest, db: AsyncSession = Depends(get_db)
         chat_service.generate_chat_stream(
             session_id=request.session_id,
             user_message=request.message,
-            provider_name=request.provider
+            provider_name=request.provider,
+            skill_name=request.skill or "auto",
         ),
         media_type="text/event-stream"
     )
