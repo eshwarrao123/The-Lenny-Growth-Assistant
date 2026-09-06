@@ -2,12 +2,21 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from typing import List
 from app.core.database import get_db
-from app.schemas.chat_schemas import CreateSessionResponse, ChatSessionDetail
+from app.schemas.chat_schemas import CreateSessionResponse, ChatSessionDetail, ChatSessionBase
 from app.services.chat_service import ChatService
 from app.core.exceptions import SessionNotFoundError
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+
+@router.get("", response_model=List[ChatSessionBase])
+async def list_sessions(limit: int = 50, db: AsyncSession = Depends(get_db)):
+    """
+    Retrieves existing persisted chat sessions ordered by most recently updated first.
+    """
+    chat_service = ChatService(db)
+    return await chat_service.list_sessions(limit=limit)
 
 @router.post("", response_model=CreateSessionResponse)
 async def create_session(db: AsyncSession = Depends(get_db)):

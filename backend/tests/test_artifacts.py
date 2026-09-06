@@ -317,6 +317,33 @@ class TestArtifactPersistence:
         assert [v.version for v in versions] == [1, 2, 3]
 
 
+class TestSessionListing:
+    """Test suite for session listing and ordering."""
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_empty(self, async_session):
+        """Test list_sessions returns empty list when no sessions exist."""
+        from app.services.chat_service import ChatService
+        service = ChatService(async_session)
+        sessions = await service.list_sessions()
+        assert sessions == []
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_ordering(self, async_session):
+        """Test list_sessions returns created sessions ordered by most recently updated."""
+        from app.services.chat_service import ChatService
+        service = ChatService(async_session)
+        s1 = await service.create_session(title="First Session")
+        s2 = await service.create_session(title="Second Session")
+
+        sessions = await service.list_sessions()
+        assert len(sessions) >= 2
+        session_ids = [s.id for s in sessions]
+        assert s2.id in session_ids
+        assert s1.id in session_ids
+        assert session_ids.index(s2.id) < session_ids.index(s1.id)
+
+
 def test_artifact_security_prompt():
     """Test that artifact prompt includes security instructions."""
     skill = ArtifactSkill()

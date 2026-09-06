@@ -29,6 +29,15 @@ class ChatService:
         await self.session.refresh(chat_session)
         return chat_session
 
+    async def list_sessions(self, limit: int = 50) -> List[ChatSession]:
+        stmt = (
+            select(ChatSession)
+            .order_by(ChatSession.updated_at.desc(), ChatSession.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_session(self, session_id: uuid.UUID) -> ChatSession:
         stmt = (
             select(ChatSession)

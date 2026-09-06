@@ -56,7 +56,13 @@ class TranscriptChunk(Base):
     episode: Mapped["Episode"] = relationship("Episode", back_populates="chunks")
 
     __table_args__ = (
-        Index("ix_chunks_embedding", "embedding", postgresql_using="hnsw", postgresql_with={"m": 16, "ef_construction": 64}),
+        Index(
+            "ix_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
         Index("ix_chunks_episode_id", "episode_id"),
     )
 

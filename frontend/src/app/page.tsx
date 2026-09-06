@@ -45,6 +45,8 @@ export default function Home() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [splitRatio, setSplitRatio] = useState(60)
   const [artifactVersions, setArtifactVersions] = useState<Artifact[]>([])
+  const [selectedProvider, setSelectedProvider] = useState<'ollama' | 'openai'>('ollama')
+  const [showSettingsModal, setShowSettingsModal] = useState(false)
   const artifactsCacheRef = useRef<Record<string, Artifact>>({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -57,14 +59,38 @@ export default function Home() {
     scrollToBottom()
   }, [messages, scrollToBottom])
 
+  const createSession = async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_URL}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'New Chat' }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setSessions(prev => [data, ...prev.filter(s => s.id !== data.id)])
+        setCurrentSessionId(data.id)
+        setMessages([])
+        return data.id
+      }
+    } catch (error) {
+      console.error('Failed to create session:', error)
+    }
+    return null
+  }
+
   const fetchSessions = async () => {
     try {
       const res = await fetch(`${API_URL}/api/sessions`)
       if (res.ok) {
         const data = await res.json()
         setSessions(data)
-        if (data.length > 0 && !currentSessionId) {
-          setCurrentSessionId(data[0].id)
+        if (data.length > 0) {
+          if (!currentSessionId) {
+            setCurrentSessionId(data[0].id)
+          }
+        } else {
+          await createSession()
         }
       }
     } catch (error) {
@@ -84,32 +110,21 @@ export default function Home() {
     }
   }
 
-  const createSession = async () => {
-    try {
-      const res = await fetch(`${API_URL}/api/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: 'New Chat' }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setSessions(prev => [data, ...prev])
-        setCurrentSessionId(data.id)
-        setMessages([])
-      }
-    } catch (error) {
-      console.error('Failed to create session:', error)
-    }
-  }
-
-  const handleSendMessage = async (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent, overrideText?: string) => {
     e.preventDefault()
-    if (!input.trim() || !currentSessionId || isStreaming) return
+    const textToSend = overrideText !== undefined ? overrideText : input
+    if (!textToSend.trim() || isStreaming) return
+
+    let activeSessionId = currentSessionId
+    if (!activeSessionId) {
+      activeSessionId = await createSession()
+    }
+    if (!activeSessionId) return
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
-      content: input,
+      content: textToSend,
       created_at: new Date().toISOString(),
     }
 
@@ -122,9 +137,9 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: currentSessionId,
-          message: input,
-          provider: 'ollama',
+          session_id: activeSessionId,
+          message: textToSend,
+          provider: selectedProvider,
           skill: 'auto',
         }),
       })
@@ -407,7 +422,12 @@ export default function Home() {
         </div>
 
         <div className="p-3 border-t border-border">
-          <button className="btn-ghost w-full justify-start gap-2" disabled={isStreaming}>
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="btn-ghost w-full justify-start gap-2"
+            disabled={isStreaming}
+            aria-label="Open settings"
+          >
             <Settings className="h-4 w-4" />
             {sidebarOpen && 'Settings'}
           </button>
@@ -476,7 +496,7 @@ export default function Home() {
                     ].map((suggestion, i) => (
                       <button
                         key={i}
-                        onClick={() => setInput(suggestion)}
+                        onClick={e => handleSendMessage(e, suggestion)}
                         className="w-full text-left px-4 py-3 rounded-lg bg-surface-elevated hover:bg-border transition-colors text-sm text-text-primary border border-transparent hover:border-border"
                       >
                         {suggestion}
@@ -614,11 +634,16 @@ export default function Home() {
                   <kbd className="px-2 py-1 bg-surface-elevated rounded text-xs font-mono border border-border">Shift+Enter</kbd>
                   <span>New line</span>
                 </div>
-                <div className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded bg-surface-elevated border border-border">
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(true)}
+                  className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded bg-surface-elevated hover:bg-border transition-colors border border-border cursor-pointer text-left"
+                  title="Click to configure provider"
+                >
                   <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                  <span className="text-xs font-medium">Local</span>
-                  <span className="text-xs text-text-muted">Ollama</span>
-                </div>
+                  <span className="text-xs font-medium">{selectedProvider === 'ollama' ? 'Local' : 'Cloud'}</span>
+                  <span className="text-xs text-text-muted">{selectedProvider === 'ollama' ? 'Ollama' : 'OpenAI'}</span>
+                </button>
               </div>
             </form>
           </div>
@@ -658,6 +683,95 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setShowSettingsModal(false)}
+          role="dialog"
+          aria-label="Settings"
+        >
+          <div
+            className="w-full max-w-md bg-surface border border-border rounded-xl p-6 space-y-6 shadow-xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border pb-4">
+              <div className="flex items-center gap-2">
+                <Settings className="h-5 w-5 text-primary" />
+                <h3 className="font-semibold text-lg text-text-primary">System Settings</h3>
+              </div>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="btn-ghost p-1.5 rounded-lg"
+                aria-label="Close settings"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-text-muted uppercase tracking-wider mb-2">
+                  LLM Execution Provider
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProvider('ollama')}
+                    className={cn(
+                      "p-3 rounded-lg border text-left transition-all",
+                      selectedProvider === 'ollama'
+                        ? "border-primary bg-primary/10 text-text-primary font-medium"
+                        : "border-border bg-surface-elevated text-text-secondary hover:border-primary/50"
+                    )}
+                  >
+                    <div className="font-semibold text-sm">Ollama (Local)</div>
+                    <div className="text-xs text-text-muted mt-1">qwen2.5:7b (CPU/GPU)</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProvider('openai')}
+                    className={cn(
+                      "p-3 rounded-lg border text-left transition-all",
+                      selectedProvider === 'openai'
+                        ? "border-primary bg-primary/10 text-text-primary font-medium"
+                        : "border-border bg-surface-elevated text-text-secondary hover:border-primary/50"
+                    )}
+                  >
+                    <div className="font-semibold text-sm">OpenAI (Cloud)</div>
+                    <div className="text-xs text-text-muted mt-1">gpt-4o-mini / gpt-4o</div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-surface-elevated border border-border p-4 space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Database Engine:</span>
+                  <span className="font-mono text-text-primary">PostgreSQL 16 + pgvector</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Embedding Model:</span>
+                  <span className="font-mono text-text-primary">nomic-embed-text (768d)</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Knowledge Index:</span>
+                  <span className="font-mono text-text-primary">303 Episodes (~14k Chunks)</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="btn-primary px-4 py-2 text-sm"
+              >
+                Save & Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
